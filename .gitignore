@@ -1,0 +1,21 @@
+# Dependencies & build
+node_modules
+dist
+
+# Secrets & local config
+.env
+.env.local
+.env.*.local
+client_secret*.json
+credentials.json
+
+# Runtime / local data
+.data
+server/uploads
+uploads/
+
+# Tooling & OS
+*.local
+*.log
+.DS_Store
+

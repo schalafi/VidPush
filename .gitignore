@@ -4,6 +4,7 @@ dist
 
 # Secrets & local config
 .env
+.env.local.example
 .env.local
 .env.*.local
 client_secret*.json

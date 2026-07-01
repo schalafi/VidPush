@@ -224,6 +224,7 @@ open http://localhost:5173
 | **Cannot reach API** | Ensure `npm run dev` is running; refresh after API line appears |
 | **TikTok: localhost redirect not supported** | Use ngrok HTTPS URL in TikTok portal and `TIKTOK_REDIRECT_URI` |
 | **TikTok Connect fails** | ngrok running on port **3000**; sandbox test user added; redirect URI matches exactly |
+| **TikTok content-sharing-guidelines / init failed** | Sandbox/unaudited app: set TikTok account to **Private** in the TikTok app (Settings → Privacy), then retry upload with **SELF_ONLY** |
 | **Google redirect_uri_mismatch** | Google Console URI must match `GOOGLE_REDIRECT_URI` in `.env` |
 | **Missing TIKTOK_CLIENT_KEY** | `.env` at **repo root**; restart `npm run dev` after editing |
 | **Proxy ECONNREFUSED on startup** | Harmless race — refresh the browser |

@@ -43,10 +43,19 @@ The app reads **`.env`** at the **repo root** (not inside `server/`).
 cp .env.example .env
 ```
 
-Fill in secrets in `.env` (see [Environment variables](#environment-variables) below).  
+Fill in secrets in `.env` (see [Environment variables](#environment-variables) below).
+
+Generate a local access key (required):
+
+```bash
+openssl rand -hex 32
+```
+
+Paste the output into `.env` as `VIDPUSH_API_KEY`. You will enter this once in the browser when the app starts — it is **not** shipped in the client or committed to git.
+
 Optional: keep a personal backup in **`.env.local.example`** (gitignored) with your filled values.
 
-**Never commit** `.env`, `.env.local.example`, or Google `client_secret*.json` files.
+**Never commit** `.env`, `.env.local.example`, ngrok authtokens, or Google `client_secret*.json` files.
 
 ### 3. Google / YouTube OAuth
 
@@ -75,19 +84,20 @@ In [TikTok for Developers](https://developers.tiktok.com/) → your app → **Sa
 | **Sandbox → Target users** | Add your TikTok account |
 | **App details URLs** | Terms/Privacy/Website → your GitHub Pages URLs |
 
-**Redirect URI (Login Kit → Web):** TikTok requires **HTTPS** — not `localhost`. Use your ngrok domain:
+**Redirect URI (Login Kit → Web):** TikTok requires **HTTPS** — not `localhost`. Use your **private** ngrok domain from `.env`:
 
 ```text
 https://YOUR-SUBDOMAIN.ngrok-free.dev/api/auth/tiktok/callback
 ```
 
-Example (replace with your ngrok subdomain):
+In `.env`, set:
 
-```text
-https://hypocrite-craftwork-flask.ngrok-free.dev/api/auth/tiktok/callback
-```
+- `NGROK_DOMAIN=YOUR-SUBDOMAIN.ngrok-free.dev` (host only — for the start script)
+- `TIKTOK_REDIRECT_URI=https://YOUR-SUBDOMAIN.ngrok-free.dev/api/auth/tiktok/callback` (full callback URL)
 
-Set the **same URL** in `.env` as `TIKTOK_REDIRECT_URI`, and add `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` from **App details → Credentials**.
+Register the **same** `TIKTOK_REDIRECT_URI` in the TikTok developer portal, and add `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` from **App details → Credentials**.
+
+Do **not** put your real ngrok subdomain in the public repo — keep it in `.env` only.
 
 ---
 
@@ -97,12 +107,56 @@ Set the **same URL** in `.env` as `TIKTOK_REDIRECT_URI`, and add `TIKTOK_CLIENT_
 |----------|---------|
 | `PORT` | API port (default `3000`) |
 | `FRONTEND_URL` | UI URL after OAuth (default `http://localhost:5173`) |
+| `VIDPUSH_API_KEY` | **Local access key** — unlock the UI (generate with `openssl rand -hex 32`) |
+| `NGROK_DOMAIN` | Your reserved ngrok host only (e.g. `abc.ngrok-free.dev`) — **keep in `.env` only** |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | YouTube OAuth |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:3000/api/auth/google/callback` |
 | `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` | TikTok OAuth |
-| `TIKTOK_REDIRECT_URI` | **HTTPS ngrok** callback (see above) |
+| `TIKTOK_REDIRECT_URI` | **HTTPS ngrok** callback — must match `NGROK_DOMAIN` and TikTok portal |
 
 Template with empty values: [`.env.example`](.env.example) (safe to commit).
+
+---
+
+## Security and local auth
+
+VidPush runs on your machine, but **TikTok OAuth needs a public HTTPS tunnel** (ngrok). While that tunnel is open, strangers could theoretically reach your API if they guess the URL.
+
+### What must stay private (never commit)
+
+| Secret | Where it lives |
+|--------|----------------|
+| `VIDPUSH_API_KEY` | `.env` only |
+| `NGROK_DOMAIN` / `TIKTOK_REDIRECT_URI` | `.env` only |
+| `GOOGLE_CLIENT_SECRET`, `TIKTOK_CLIENT_SECRET` | `.env` only |
+| ngrok authtoken | `~/.config/ngrok/` (or ngrok config on your Mac) |
+| OAuth tokens | `.data/vidpush.db` (gitignored) |
+
+### How auth works
+
+1. You set `VIDPUSH_API_KEY` in `.env` (a long random string).
+2. When you open the UI, you see an **Unlock** screen and paste that key **once**.
+3. The server checks the key and sets an **httpOnly cookie** (a session) in your browser.
+4. All sensitive API routes (upload, connect, disconnect, status) require that cookie.
+5. Click **Lock** in the header to clear the session.
+
+The access key is **never** embedded in the React app or the public repo — only you know it from `.env`.
+
+### What stays public (by design)
+
+These paths must work without your cookie so OAuth providers can redirect back:
+
+- `GET /api/auth/google/callback`
+- `GET /api/auth/tiktok/callback`
+- `GET /api/health` (returns `{"ok":true}` only)
+
+Everything else returns **401 Unauthorized** without a valid session.
+
+### Practical habits
+
+- **Stop ngrok** when you are not connecting TikTok (`Ctrl+C` or quit the start script).
+- **Use placeholders** in docs/issues — never paste your real ngrok subdomain or API key.
+- **Regenerate** `VIDPUSH_API_KEY` if you think it was leaked.
 
 ---
 
@@ -124,20 +178,20 @@ Wait until you see **both**:
 
 Open the UI: [http://localhost:5173](http://localhost:5173)
 
+**First visit each session:** enter your `VIDPUSH_API_KEY` on the Unlock screen.
+
 If the UI shows “Cannot reach API”, wait a second and **refresh** — the client sometimes starts before the API.
+
+### macOS shortcut
+
+Double-click **`Start VidPush.command`** (or run `./scripts/start-vidpush.sh`). It reads `NGROK_DOMAIN` from `.env` and starts ngrok when set.
 
 ### Terminal 2 — ngrok (for TikTok Connect)
 
-Only needed when connecting or reconnecting **TikTok**:
+Only needed when connecting or reconnecting **TikTok** (the start script can do this automatically if `NGROK_DOMAIN` is in `.env`):
 
 ```bash
 ngrok http --url=YOUR-SUBDOMAIN.ngrok-free.dev 3000
-```
-
-Example:
-
-```bash
-ngrok http --url=hypocrite-craftwork-flask.ngrok-free.dev 3000
 ```
 
 Verify the tunnel hits your API:
@@ -146,11 +200,11 @@ Verify the tunnel hits your API:
 https://YOUR-SUBDOMAIN.ngrok-free.dev/api/health
 ```
 
-Should return: `{"ok":true}`
+Should return: `{"ok":true}` (health is public; uploads still require unlock).
 
 ### Connect accounts (once per machine)
 
-1. Open [http://localhost:5173](http://localhost:5173)
+1. Open [http://localhost:5173](http://localhost:5173) and **Unlock** with your `VIDPUSH_API_KEY`
 2. Click **Connect** for **YouTube** (no ngrok needed)
 3. Click **Connect** for **TikTok** (ngrok must be running)
 4. Both should show **Connected**
@@ -181,17 +235,15 @@ In each terminal where something is running, press **Ctrl+C**:
 # First time only
 npm install
 cp .env.example .env
-# edit .env with your keys
+openssl rand -hex 32   # → paste as VIDPUSH_API_KEY in .env
+# edit .env: OAuth keys, NGROK_DOMAIN, TIKTOK_REDIRECT_URI
 
 # Every session
-npm run dev                                    # terminal 1
-ngrok http --url=YOUR-SUBDOMAIN.ngrok-free.dev 3000   # terminal 2 (TikTok connect)
-
-# Browser
-open http://localhost:5173
+./scripts/start-vidpush.sh              # or npm run dev + ngrok manually
+# Browser: unlock with VIDPUSH_API_KEY, then use the app
 
 # Stop
-# Ctrl+C in each terminal
+# Ctrl+C in each terminal (or stop Start VidPush.command)
 ```
 
 ---
@@ -221,6 +273,7 @@ open http://localhost:5173
 
 | Problem | Fix |
 |---------|-----|
+| **Unauthorized / Unlock screen** | Set `VIDPUSH_API_KEY` in `.env` and restart the server; enter the same value in the UI |
 | **Cannot reach API** | Ensure `npm run dev` is running; refresh after API line appears |
 | **TikTok: localhost redirect not supported** | Use ngrok HTTPS URL in TikTok portal and `TIKTOK_REDIRECT_URI` |
 | **TikTok Connect fails** | ngrok running on port **3000**; sandbox test user added; redirect URI matches exactly |
@@ -233,6 +286,7 @@ open http://localhost:5173
 
 ## Test checklist
 
+- [ ] `VIDPUSH_API_KEY` set in `.env`; UI unlock works
 - [ ] `http://localhost:3000/api/health` → `{"ok":true}`
 - [ ] YouTube **Connected** → upload one video → **Done** → check YouTube Studio
 - [ ] TikTok **Connected** (with ngrok) → upload one video → **Done** → check TikTok profile

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ApiError,
   connectGoogle,
   connectTiktok,
   disconnectGoogle,
   disconnectTiktok,
   getAuthStatus,
   getJob,
+  getSession,
+  logout,
+  unlock,
   uploadVideo,
   type AuthStatus,
   type PlatformState,
@@ -26,6 +30,11 @@ function formatPlatformStatus(p: PlatformState): string {
 }
 
 export default function App() {
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [accessKey, setAccessKey] = useState("");
+  const [unlockErr, setUnlockErr] = useState<string | null>(null);
+  const [unlockBusy, setUnlockBusy] = useState(false);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authErr, setAuthErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -42,14 +51,59 @@ export default function App() {
       setAuthErr(null);
       const s = await getAuthStatus();
       setAuth(s);
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setAuthenticated(false);
+        setAuth(null);
+        return;
+      }
       setAuthErr("Cannot reach API. Is the server running on port 3000?");
     }
   }, []);
 
   useEffect(() => {
-    void refreshAuth();
+    void (async () => {
+      try {
+        const session = await getSession();
+        setAuthenticated(session.authenticated);
+        setSessionChecked(true);
+        if (session.authenticated) {
+          await refreshAuth();
+        }
+      } catch {
+        setAuthErr("Cannot reach API. Is the server running on port 3000?");
+        setSessionChecked(true);
+      }
+    })();
   }, [refreshAuth]);
+
+  const onUnlock = async () => {
+    if (!accessKey.trim()) return;
+    setUnlockBusy(true);
+    setUnlockErr(null);
+    try {
+      await unlock(accessKey.trim());
+      setAuthenticated(true);
+      setAccessKey("");
+      await refreshAuth();
+    } catch (e) {
+      setUnlockErr(e instanceof ApiError ? e.message : "Unlock failed");
+    } finally {
+      setUnlockBusy(false);
+    }
+  };
+
+  const onLock = async () => {
+    try {
+      await logout();
+    } catch {
+      /* cookie may already be gone */
+    }
+    setAuthenticated(false);
+    setAuth(null);
+    setJob(null);
+    setBanner(null);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -150,6 +204,70 @@ export default function App() {
     }
   };
 
+  if (!sessionChecked) {
+    return (
+      <div className="page">
+        <p className="subtitle">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="page">
+        <header className="header">
+          <div>
+            <h1 className="title">VidPush</h1>
+            <p className="subtitle">
+              Enter your local access key to use this app. It lives only in your{" "}
+              <code>.env</code> on this machine — never in the public repo.
+            </p>
+          </div>
+        </header>
+
+        {authErr && (
+          <div className="banner error" role="alert">
+            {authErr}
+          </div>
+        )}
+
+        <section className="card unlock-card">
+          <h2>Unlock</h2>
+          <p className="hint">
+            Use the value of <code>VIDPUSH_API_KEY</code> from your local <code>.env</code>.
+          </p>
+          <div className="field">
+            <label htmlFor="access-key">Access key</label>
+            <input
+              id="access-key"
+              type="password"
+              value={accessKey}
+              onChange={(e) => setAccessKey(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void onUnlock();
+              }}
+              placeholder="Paste your VIDPUSH_API_KEY"
+              autoComplete="off"
+            />
+          </div>
+          {unlockErr && (
+            <div className="banner error" role="alert">
+              {unlockErr}
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn primary"
+            disabled={unlockBusy || !accessKey.trim()}
+            onClick={() => void onUnlock()}
+          >
+            {unlockBusy ? "Checking…" : "Unlock"}
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -160,6 +278,9 @@ export default function App() {
             platform once on this machine.
           </p>
         </div>
+        <button type="button" className="btn ghost" onClick={() => void onLock()}>
+          Lock
+        </button>
       </header>
 
       {banner && (

@@ -18,7 +18,46 @@ export type UploadJob = {
   tiktok: PlatformState;
 };
 
-const api = (path: string, init?: RequestInit) => fetch(path, init);
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const api = async (path: string, init?: RequestInit) => {
+  const res = await fetch(path, { credentials: "include", ...init });
+  if (res.status === 401) {
+    throw new ApiError(401, "Unauthorized");
+  }
+  return res;
+};
+
+export async function getSession(): Promise<{ authenticated: boolean }> {
+  const res = await fetch("/api/auth/session", { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to check session");
+  return res.json() as Promise<{ authenticated: boolean }>;
+}
+
+export async function unlock(apiKey: string): Promise<void> {
+  const res = await fetch("/api/auth/unlock", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (res.status === 401) {
+    throw new ApiError(401, "Invalid access key");
+  }
+  if (!res.ok) throw new Error("Unlock failed");
+}
+
+export async function logout(): Promise<void> {
+  const res = await api("/api/auth/logout", { method: "POST" });
+  if (!res.ok) throw new Error("Logout failed");
+}
 
 export async function getAuthStatus(): Promise<AuthStatus> {
   const res = await api("/api/auth/status");

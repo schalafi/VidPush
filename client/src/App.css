@@ -299,6 +299,20 @@
   border-top: 1px solid var(--border);
 }
 
+.unlock-card {
+  max-width: 28rem;
+}
+
+.unlock-card code {
+  font-size: 0.85em;
+  color: var(--accent);
+}
+
+.page code {
+  font-size: 0.85em;
+  color: var(--accent);
+}
+
 .platform-status {
   display: flex;
   flex-direction: column;

@@ -1,9 +1,11 @@
 import dotenv from "dotenv";
 import fs from "fs";
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { requireApiKeyConfigured, requireAuth } from "./middleware/apiAuth.js";
 import authRoutes from "./routes/auth.js";
 import uploadRoutes from "./routes/upload.js";
 
@@ -21,6 +23,7 @@ for (const envPath of envCandidates) {
   }
 }
 dotenv.config();
+requireApiKeyConfigured();
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -34,11 +37,13 @@ app.use(
 );
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.use(requireAuth);
 app.use("/api/auth", authRoutes);
 app.use("/api/upload", uploadRoutes);
 

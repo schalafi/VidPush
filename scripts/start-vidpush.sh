@@ -95,6 +95,7 @@ read_env_var() {
 
 PORT="$(read_env_var PORT 3000)"
 FRONTEND_URL="$(read_env_var FRONTEND_URL "http://localhost:5173")"
+NGROK_DOMAIN="$(read_env_var NGROK_DOMAIN "")"
 TIKTOK_REDIRECT_URI="$(read_env_var TIKTOK_REDIRECT_URI "")"
 
 if [[ ! -d node_modules ]]; then
@@ -113,8 +114,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-NGROK_HOST=""
-if [[ "$TIKTOK_REDIRECT_URI" =~ ^https://([^/]+)/ ]]; then
+NGROK_HOST="$NGROK_DOMAIN"
+if [[ -z "$NGROK_HOST" ]] && [[ "$TIKTOK_REDIRECT_URI" =~ ^https://([^/]+)/ ]]; then
   NGROK_HOST="${BASH_REMATCH[1]}"
 fi
 

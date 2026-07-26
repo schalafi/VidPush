@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { deleteTokens, upsertTokens } from "../db.js";
+import {
+  isAuthenticated,
+  sessionCookieOptions,
+  sessionCookieValue,
+  SESSION_COOKIE,
+  verifyApiKey,
+} from "../middleware/apiAuth.js";
 import { getGoogleAuthUrl, getOAuth2Client } from "../oauth/google.js";
 import { exchangeTikTokCode, getTikTokAuthUrl } from "../oauth/tiktok.js";
 import { putOAuthState, takeOAuthState } from "../oauthState.js";
@@ -16,6 +23,25 @@ function defaultUserId(): string {
 function frontendUrl(): string {
   return process.env.FRONTEND_URL ?? "http://localhost:5173";
 }
+
+router.get("/session", (req, res) => {
+  res.json({ authenticated: isAuthenticated(req) });
+});
+
+router.post("/unlock", (req, res) => {
+  const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey : "";
+  if (!verifyApiKey(apiKey)) {
+    res.status(401).json({ error: "Invalid access key" });
+    return;
+  }
+  res.cookie(SESSION_COOKIE, sessionCookieValue(), sessionCookieOptions());
+  res.json({ ok: true });
+});
+
+router.post("/logout", (_req, res) => {
+  res.clearCookie(SESSION_COOKIE, { path: "/" });
+  res.json({ ok: true });
+});
 
 router.get("/status", (_req, res) => {
   const userId = defaultUserId();

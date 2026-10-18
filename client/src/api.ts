@@ -1,7 +1,11 @@
+export type MetaConnection = { configured: boolean; connected: boolean; accountId: string | null; name: string | null };
 export type AuthStatus = {
   userId: string;
   youtube: boolean;
   tiktok: boolean;
+  facebook: MetaConnection;
+  instagram: MetaConnection;
+  facebookPages: { id: string; name: string }[];
 };
 
 export type PlatformState = {
@@ -16,6 +20,8 @@ export type UploadJob = {
   createdAt: number;
   youtube: PlatformState;
   tiktok: PlatformState;
+  facebook: PlatformState;
+  instagram: PlatformState;
 };
 
 export class ApiError extends Error {
@@ -35,10 +41,10 @@ const api = async (path: string, init?: RequestInit) => {
   return res;
 };
 
-export async function getSession(): Promise<{ authenticated: boolean }> {
+export async function getSession(): Promise<{ authenticated: boolean; provider: "google" | "key"; user?: { email: string } }> {
   const res = await fetch("/api/auth/session", { credentials: "include" });
   if (!res.ok) throw new Error("Failed to check session");
-  return res.json() as Promise<{ authenticated: boolean }>;
+  return res.json() as Promise<{ authenticated: boolean; provider: "google" | "key"; user?: { email: string } }>;
 }
 
 export async function unlock(apiKey: string): Promise<void> {
@@ -95,4 +101,31 @@ export async function getJob(jobId: string): Promise<UploadJob> {
   const res = await api(`/api/upload/jobs/${jobId}`);
   if (!res.ok) throw new Error("Job not found");
   return res.json() as Promise<UploadJob>;
+}
+
+export function connectMeta(platform: "facebook" | "instagram"): void {
+  if (platform === "facebook") {
+    window.open("/api/auth/facebook/start", "_blank", "noopener,noreferrer");
+    return;
+  }
+  window.location.href = `/api/auth/${platform}/start`;
+}
+export async function startFacebookConnection(): Promise<{ id: string; url: string }> {
+  const res = await api("/api/auth/facebook/handoff", { method: "POST" });
+  if (!res.ok) throw new Error("Could not start Facebook connection.");
+  return res.json();
+}
+export async function claimFacebookConnection(id: string): Promise<{ status: string; error?: string }> {
+  const res = await api(`/api/auth/facebook/handoff/${encodeURIComponent(id)}/claim`, { method: "POST" });
+  const result = await res.json();
+  if (!res.ok) throw new ApiError(res.status, result.error ?? "Could not check Facebook connection.");
+  return result;
+}
+export async function disconnectMeta(platform: "facebook" | "instagram"): Promise<void> {
+  const res = await api(`/api/auth/${platform}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to disconnect ${platform}`);
+}
+export async function selectFacebookPage(pageId: string): Promise<void> {
+  const res = await api("/api/auth/facebook/page", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pageId }) });
+  if (!res.ok) throw new Error("Could not select that Page. Reconnect Facebook and try again.");
 }

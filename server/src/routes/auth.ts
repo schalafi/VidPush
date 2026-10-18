@@ -1,18 +1,24 @@
 import { Router } from "express";
-import { v4 as uuidv4 } from "uuid";
-import { deleteTokens, upsertTokens } from "../db.js";
+import { db, deleteTokens, upsertTokens } from "../db.js";
 import {
   isAuthenticated,
   sessionCookieOptions,
-  sessionCookieValue,
+  createSession,
+  getSessionIdentity,
+  revokeSession,
+  authProvider,
   SESSION_COOKIE,
   verifyApiKey,
 } from "../middleware/apiAuth.js";
 import { getGoogleAuthUrl, getOAuth2Client } from "../oauth/google.js";
 import { exchangeTikTokCode, getTikTokAuthUrl } from "../oauth/tiktok.js";
-import { putOAuthState, takeOAuthState } from "../oauthState.js";
+import { beginOAuth, finishOAuth } from "../oauthState.js";
+import { getLoginClient, allowedGoogleIdentity } from "../oauth/login.js";
 import { isYoutubeConnected } from "../services/googleTokens.js";
 import { isTiktokConnected } from "../services/tiktokTokens.js";
+
+import { metaConnection } from "../services/metaTokens.js";
+import { metaConfigured } from "../oauth/meta.js";
 
 const router = Router();
 
@@ -25,7 +31,7 @@ function frontendUrl(): string {
 }
 
 router.get("/session", (req, res) => {
-  res.json({ authenticated: isAuthenticated(req) });
+  res.json({ authenticated: isAuthenticated(req), provider: authProvider(), user: getSessionIdentity(req) });
 });
 
 router.post("/unlock", (req, res) => {
@@ -34,11 +40,13 @@ router.post("/unlock", (req, res) => {
     res.status(401).json({ error: "Invalid access key" });
     return;
   }
-  res.cookie(SESSION_COOKIE, sessionCookieValue(), sessionCookieOptions());
+  revokeSession(req);
+  res.cookie(SESSION_COOKIE, createSession({ sub: "local-key", email: "" }), sessionCookieOptions());
   res.json({ ok: true });
 });
 
-router.post("/logout", (_req, res) => {
+router.post("/logout", (req, res) => {
+  revokeSession(req);
   res.clearCookie(SESSION_COOKIE, { path: "/" });
   res.json({ ok: true });
 });
@@ -49,18 +57,20 @@ router.get("/status", (_req, res) => {
     userId,
     youtube: isYoutubeConnected(userId),
     tiktok: isTiktokConnected(userId),
+    facebook: { ...metaConnection(userId, "facebook"), configured: metaConfigured("facebook") },
+    instagram: { ...metaConnection(userId, "instagram"), configured: metaConfigured("instagram") },
+    facebookPages: db.prepare("SELECT id, name FROM facebook_pages WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)").all(userId, Date.now()),
   });
 });
 
 router.get("/google/start", (_req, res) => {
   const userId = defaultUserId();
-  const state = uuidv4();
-  putOAuthState(state, userId);
+  const { state } = beginOAuth(res, "youtube", userId);
   const url = getGoogleAuthUrl(state);
   res.redirect(url);
 });
 
-router.get("/google/callback", async (req, res) => {
+router.get(["/google/callback", "/google/complete"], async (req, res) => {
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
   const err = req.query.error as string | undefined;
@@ -72,7 +82,7 @@ router.get("/google/callback", async (req, res) => {
     res.redirect(`${frontendUrl()}/?oauth=google_error&message=missing_code`);
     return;
   }
-  const userId = takeOAuthState(state);
+  const userId = finishOAuth(req, res, "youtube")?.userId;
   if (!userId) {
     res.redirect(`${frontendUrl()}/?oauth=google_error&message=invalid_state`);
     return;
@@ -99,13 +109,12 @@ router.get("/google/callback", async (req, res) => {
 
 router.get("/tiktok/start", (_req, res) => {
   const userId = defaultUserId();
-  const state = uuidv4();
-  putOAuthState(state, userId);
+  const { state } = beginOAuth(res, "tiktok", userId);
   const url = getTikTokAuthUrl(state);
   res.redirect(url);
 });
 
-router.get("/tiktok/callback", async (req, res) => {
+router.get(["/tiktok/callback", "/tiktok/complete"], async (req, res) => {
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
   const oauthErr = req.query.error as string | undefined;
@@ -119,7 +128,7 @@ router.get("/tiktok/callback", async (req, res) => {
     res.redirect(`${frontendUrl()}/?oauth=tiktok_error&message=missing_code`);
     return;
   }
-  const userId = takeOAuthState(state);
+  const userId = finishOAuth(req, res, "tiktok")?.userId;
   if (!userId) {
     res.redirect(`${frontendUrl()}/?oauth=tiktok_error&message=invalid_state`);
     return;
@@ -150,6 +159,36 @@ router.delete("/google", (_req, res) => {
 router.delete("/tiktok", (_req, res) => {
   deleteTokens(defaultUserId(), "tiktok");
   res.json({ ok: true });
+});
+
+router.get("/login/google/start", (_req, res) => {
+  if (authProvider() !== "google") { res.status(404).end(); return; }
+  try {
+    const client = getLoginClient();
+    const { state, nonce } = beginOAuth(res, "login", "owner");
+    res.redirect(client.generateAuthUrl({ scope: ["openid", "email", "profile"], state, nonce, prompt: "select_account" }));
+  } catch {
+    res.redirect(`${frontendUrl()}/?login=unavailable`);
+  }
+});
+router.get(["/login/google/callback", "/login/google/complete"], async (req, res) => {
+  const pending = finishOAuth(req, res, "login");
+  if (authProvider() !== "google" || !pending || typeof req.query.code !== "string" || req.query.error) {
+    res.redirect(`${frontendUrl()}/?login=failed`); return;
+  }
+  try {
+    const client = getLoginClient();
+    const { tokens } = await client.getToken(req.query.code);
+    if (!tokens.id_token) throw new Error("Missing ID token");
+    const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: process.env.GOOGLE_LOGIN_CLIENT_ID });
+    const identity = allowedGoogleIdentity(ticket.getPayload(), pending.nonce);
+    if (!identity) { res.redirect(`${frontendUrl()}/?login=denied`); return; }
+    revokeSession(req);
+    res.cookie(SESSION_COOKIE, createSession(identity), sessionCookieOptions());
+    res.redirect(frontendUrl());
+  } catch {
+    res.redirect(`${frontendUrl()}/?login=failed`);
+  }
 });
 
 export default router;

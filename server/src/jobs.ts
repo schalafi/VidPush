@@ -12,14 +12,18 @@ export type UploadJob = {
   createdAt: number;
   youtube: PlatformState;
   tiktok: PlatformState;
+  facebook: PlatformState;
+  instagram: PlatformState;
 };
 
 const jobs = new Map<string, UploadJob>();
 
-export function createJob(id: string, youtube: boolean, tiktok: boolean): UploadJob {
+export function createJob(id: string, youtube: boolean, tiktok: boolean, facebook = false, instagram = false): UploadJob {
   const job: UploadJob = {
     id,
     createdAt: Date.now(),
+    facebook: { status: facebook ? "queued" : "idle" },
+    instagram: { status: instagram ? "queued" : "idle" },
     youtube: {
       status: youtube ? "queued" : "idle",
     },
@@ -42,8 +46,7 @@ export function updatePlatform(
 ): void {
   const job = jobs.get(jobId);
   if (!job) return;
-  const key = platform === "youtube" ? "youtube" : "tiktok";
-  job[key] = { ...job[key], ...patch };
+  job[platform] = { ...job[platform], ...patch };
 }
 
 /** Prune old jobs to avoid unbounded memory (PoC) */
@@ -53,6 +56,7 @@ export function pruneJobs(): void {
   const sorted = [...jobs.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
   while (sorted.length > MAX_JOBS) {
     const [id] = sorted.shift()!;
-    jobs.delete(id);
+    const job = jobs.get(id)!;
+    if (![job.youtube, job.tiktok, job.facebook, job.instagram].some(p => ["queued", "uploading"].includes(p.status))) jobs.delete(id);
   }
 }

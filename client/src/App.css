@@ -332,3 +332,14 @@
 .status-line.err {
   color: #fecdd3;
 }
+
+.field select {
+  width: 100%;
+  padding: 0.65rem;
+  color: inherit;
+  background: var(--bg, #111827);
+  border: 1px solid var(--border, #374151);
+  border-radius: 0.5rem;
+}
+
+a.btn { text-decoration: none; display: inline-block; }

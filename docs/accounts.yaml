@@ -1,0 +1,80 @@
+# Account and project inventory. Runtime settings still come from .env / Modal Secrets.
+# Store secret references here, never passwords, client secrets, or access tokens.
+# null means not yet confirmed or configured.
+schema_version: 1
+updated_at: "2026-10-17"
+application: VidPush
+
+login:
+  provider: google
+  allowed_email: doublef.corp@gmail.com
+  allowed_email_env: GOOGLE_ALLOWED_EMAIL
+  status: deployed_awaiting_owner_sign_in_test
+
+google_cloud:
+  administration_account: doublef.corp@gmail.com
+  project:
+    status: selected
+    name: My First Project
+    id: project-6bc7ffc8-6626-4cf3-922
+    number: "612519797386"
+  login_oauth_client:
+    status: credentials_saved_locally_and_in_modal
+    suggested_name: VidPush owner sign-in
+    type: web_application
+    client_id: "612519797386-jd7ir97q6vfh6cbcd80n91u3rov804gm.apps.googleusercontent.com"
+    client_id_env: GOOGLE_LOGIN_CLIENT_ID
+    client_secret_env: GOOGLE_LOGIN_CLIENT_SECRET
+    redirect_uri_env: GOOGLE_LOGIN_REDIRECT_URI
+    redirect_uris:
+      local: http://localhost:3000/api/auth/login/google/callback
+      modal: https://schalafi-vidpush--vidpush-web.modal.run/api/auth/login/google/callback
+    scopes:
+      - openid
+      - email
+      - profile
+
+hosting:
+  provider: modal
+  workspace: schalafi
+  environment: vidpush
+  app: vidpush
+  url: https://schalafi-vidpush--vidpush-web.modal.run
+  secret_name: vidpush-config
+  local_secrets_file: .env
+  deployment:
+    version: v5
+    deployed_at: "2026-10-16T19:20:15-06:00"
+    source: local_working_tree
+    health_check: passed
+    google_login_redirect_check: passed_on_v3
+
+publishing:
+  # These are independent destinations, separate from the Google login identity.
+  facebook:
+    status: credentials_deployed_awaiting_page_connection_test
+    account_type: page
+    administration_account: Doublef Corp
+    page_name: Doublef
+    page_id: null
+    app_id: "2633496457090906"
+    app_id_env: FACEBOOK_APP_ID
+    app_secret_env: FACEBOOK_APP_SECRET
+    redirect_uri_env: FACEBOOK_REDIRECT_URI
+    redirect_uri: https://schalafi-vidpush--vidpush-web.modal.run/api/auth/facebook/callback
+  instagram:
+    status: awaiting_account_setup
+    account_type: professional
+    username: null
+    account_id: null
+    app_id: null
+    app_id_env: INSTAGRAM_APP_ID
+    app_secret_env: INSTAGRAM_APP_SECRET
+    redirect_uri_env: INSTAGRAM_REDIRECT_URI
+    redirect_uri: https://schalafi-vidpush--vidpush-web.modal.run/api/auth/instagram/callback
+
+references:
+  google_setup: google-auth-setup.md
+  meta_setup: meta-setup.md
+  deployment_setup: modal.md
+  reference_implementation: https://github.com/schalafi/flowing-invention/blob/main/docs/google-auth-setup.md

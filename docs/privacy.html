@@ -32,25 +32,29 @@
   <body>
     <p class="muted"><a href="index.html">VidPush</a></p>
     <h1>Privacy Policy</h1>
-    <p class="muted">Last updated: June 21, 2026</p>
+    <p class="muted">Last updated: October 13, 2026</p>
 
     <p>
       This Privacy Policy describes how VidPush (“the App”) handles information when you use it to
-      connect YouTube/TikTok accounts and upload videos.
+      sign in with Google, connect YouTube, TikTok, Facebook, or Instagram accounts, and upload videos.
     </p>
 
     <h2>1. What VidPush does</h2>
     <p>
-      VidPush is local software that uses OAuth to access your YouTube and TikTok accounts on your
-      behalf so you can upload videos you choose. By default, it stores OAuth tokens on your computer
-      in a local database file.
+      VidPush can run locally or in a private, owner-operated Modal deployment. It uses Google to
+      verify the authorized owner's identity and separate OAuth connections to publish videos to
+      selected platforms. Credentials are stored in the application's SQLite database: on the
+      local computer for local use, or in the deployment's persistent storage for hosted use.
     </p>
 
     <h2>2. Information we process</h2>
     <ul>
+      <li><strong>Google identity</strong>: verified email and Google subject identifier are stored
+        with a hash of the session token and its expiry. Login requests basic identity scopes;
+        publishing permissions are requested separately.</li>
       <li>
-        <strong>OAuth tokens</strong> from Google/YouTube and TikTok, stored locally to keep you
-        signed in.
+        <strong>Publishing credentials</strong> from Google/YouTube, TikTok, Facebook, and Instagram,
+        plus selected destination IDs and names, stored to support connected accounts.
       </li>
       <li>
         <strong>Video files</strong> you select, temporarily processed for upload to the platforms
@@ -61,22 +65,25 @@
       </li>
     </ul>
 
-    <h2>3. What we do not do (default local setup)</h2>
+    <h2>3. Local and hosted processing</h2>
     <ul>
-      <li>We do not operate a central VidPush server that collects your videos or tokens by default.</li>
+      <li>Local deployments process files on the local computer. In a Modal deployment, the server receives your selected video, processes the upload, and stores connection and session data in its configured storage.</li>
       <li>We do not sell your personal information.</li>
     </ul>
 
     <h2>4. Third-party services</h2>
     <p>
-      When you connect accounts or upload, Google/YouTube and TikTok receive data according to their
+      When you sign in, connect accounts, or upload, Google/YouTube, TikTok, and Meta receive the data needed for those operations according to their
       own privacy policies. Review those policies on their websites.
     </p>
 
     <h2>5. Data retention</h2>
     <p>
-      OAuth tokens remain on your device until you disconnect accounts or delete local App data.
-      Temporary upload files are removed after upload jobs complete.
+      Publishing credentials remain in the configured database until you disconnect accounts or
+      delete application data. Facebook disconnection also removes stored Page choices. Sessions
+      expire after seven days and are revoked on sign-out; expired session rows are removed when
+      new sessions are created. Temporary upload files are removed after jobs complete; interrupted
+      jobs may leave temporary files until the runtime is cleaned up or replaced.
     </p>
 
     <h2>6. Security</h2>
@@ -88,7 +95,7 @@
     <h2>7. Changes</h2>
     <p>
       We may update this policy. The “Last updated” date will reflect changes. If you deploy VidPush
-      as a hosted service in the future, this policy should be updated to describe that deployment.
+      in a different environment, update this description to reflect that deployment.
     </p>
 
     <h2>8. Contact</h2>

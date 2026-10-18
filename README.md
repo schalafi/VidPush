@@ -7,6 +7,7 @@ accounts.
 
 - App: https://schalafi-vidpush--vidpush-web.modal.run/
 - Public information / terms / privacy: https://schalafi.github.io/VidPush/
+- [Authorization overview: sign-in and per-platform flows](docs/auth-overview.md)
 - [Account and cloud project registry (YAML)](docs/accounts.yaml)
 - [Google sign-in setup](docs/google-auth-setup.md)
 - [Facebook and Instagram setup](docs/meta-setup.md)

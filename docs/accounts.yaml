@@ -51,8 +51,15 @@ hosting:
 
 publishing:
   # These are independent destinations, separate from the Google login identity.
+  youtube:
+    status: connected_publishing_verified_e2e
+    last_verified: "2026-10-17"
+  tiktok:
+    status: connected_publishing_verified_e2e
+    last_verified: "2026-10-17"
   facebook:
-    status: credentials_deployed_awaiting_page_connection_test
+    status: page_connected_publishing_verified_e2e
+    last_verified: "2026-10-17"
     account_type: page
     administration_account: Doublef Corp
     page_name: Doublef
@@ -74,6 +81,7 @@ publishing:
     redirect_uri: https://schalafi-vidpush--vidpush-web.modal.run/api/auth/instagram/callback
 
 references:
+  auth_overview: auth-overview.md
   google_setup: google-auth-setup.md
   meta_setup: meta-setup.md
   deployment_setup: modal.md

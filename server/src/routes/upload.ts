@@ -4,18 +4,13 @@ import multer from "multer";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
-import { createJob, getJob, pruneJobs, updatePlatform } from "../jobs.js";
+import { createJob, getJob, pruneJobs, runUploadJob } from "../jobs.js";
+import { createScheduled, dataDir } from "../db.js";
 import { isYoutubeConnected } from "../services/googleTokens.js";
 import { isTiktokConnected } from "../services/tiktokTokens.js";
-import { uploadToYoutube } from "../services/youtubeUpload.js";
-import {
-  uploadToTiktok,
-  waitForTiktokPublish,
-} from "../services/tiktokUpload.js";
-import { getValidTikTokAccessToken } from "../services/tiktokTokens.js";
 
 import { metaConnection } from "../services/metaTokens.js";
-import { uploadToMeta } from "../services/metaUpload.js";
+import { parsePublishAt, validatePublishAt } from "../schedulePolicy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const uploadDir = path.join(__dirname, "..", "..", "uploads");
@@ -45,12 +40,19 @@ function parseBool(v: unknown): boolean {
   return false;
 }
 
+export function scheduledDir(): string {
+  const dir = path.join(dataDir(), "scheduled-uploads");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 router.post("/", upload.single("video"), (req, res) => {
   const userId = defaultUserId();
   if (!req.file?.path) {
     res.status(400).json({ error: "Missing video file (field name: video)" });
     return;
   }
+  const cleanup = () => fs.unlink(req.file!.path, () => {});
 
   const wantYoutube = parseBool(req.body.youtube);
   const wantTiktok = parseBool(req.body.tiktok);
@@ -64,40 +66,101 @@ router.post("/", upload.single("video"), (req, res) => {
   const description =
     typeof req.body.description === "string" ? req.body.description : "";
 
+  let publishAtMs: number | undefined;
+  try {
+    publishAtMs = parsePublishAt(req.body.publishAt);
+  } catch (e) {
+    cleanup();
+    res.status(400).json({ error: e instanceof Error ? e.message : "Invalid schedule time" });
+    return;
+  }
+
+  // TikTok and Instagram have no native scheduling: with a publish time they
+  // are held server-side and dispatched later. YouTube/Facebook schedule
+  // natively at upload time, so they always run immediately.
+  const heldTiktok = wantTiktok && publishAtMs !== undefined;
+  const heldInstagram = wantInstagram && publishAtMs !== undefined;
+  const nowTiktok = wantTiktok && !heldTiktok;
+  const nowInstagram = wantInstagram && !heldInstagram;
+
   if (!wantYoutube && !wantTiktok && !wantFacebook && !wantInstagram) {
-    fs.unlink(req.file.path, () => {});
+    cleanup();
     res.status(400).json({ error: "Select at least one destination" });
     return;
   }
 
+  if (publishAtMs !== undefined) {
+    const err = validatePublishAt(publishAtMs, { facebook: wantFacebook, held: heldTiktok || heldInstagram });
+    if (err) {
+      cleanup();
+      res.status(400).json({ error: err });
+      return;
+    }
+  }
+
   if (wantYoutube && !isYoutubeConnected(userId)) {
-    fs.unlink(req.file.path, () => {});
+    cleanup();
     res.status(400).json({ error: "Connect YouTube first" });
     return;
   }
 
   if (wantTiktok && !isTiktokConnected(userId)) {
-    fs.unlink(req.file.path, () => {});
+    cleanup();
     res.status(400).json({ error: "Connect TikTok first" });
     return;
   }
 
   for (const platform of ["facebook", "instagram"] as const) {
     if ((platform === "facebook" ? wantFacebook : wantInstagram) && !metaConnection(userId, platform).connected) {
-      fs.unlink(req.file.path, () => {});
+      cleanup();
       res.status(400).json({ error: `Connect ${platform} first` }); return;
     }
   }
   if ((wantFacebook || wantInstagram) && (req.file.size > 1024 * 1024 * 1024 || !/\.(mp4|mov)$/i.test(req.file.originalname))) {
-    fs.unlink(req.file.path, () => {});
+    cleanup();
     res.status(400).json({ error: "Facebook/Instagram uploads require an MP4 or MOV file up to 1 GB." }); return;
   }
   if (wantInstagram && baseTitle.length > 2200) {
-    fs.unlink(req.file.path, () => {});
+    cleanup();
     res.status(400).json({ error: "Instagram captions must be at most 2,200 characters." }); return;
   }
+
+  const scheduleIds: string[] = [];
+  if ((heldTiktok || heldInstagram) && publishAtMs !== undefined) {
+    const id = uuidv4();
+    const safe = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const dest = path.join(scheduledDir(), `${id}-${safe}`);
+    try {
+      fs.copyFileSync(req.file.path, dest);
+    } catch {
+      cleanup();
+      res.status(500).json({ error: "Could not store the video for scheduled publishing" });
+      return;
+    }
+    createScheduled({
+      id,
+      user_id: userId,
+      file_path: dest,
+      original_name: req.file.originalname,
+      size: req.file.size,
+      title: baseTitle,
+      description,
+      destinations: JSON.stringify({ tiktok: heldTiktok, instagram: heldInstagram }),
+      publish_at: publishAtMs,
+      created_at: Date.now(),
+    });
+    scheduleIds.push(id);
+  }
+
+  if (!wantYoutube && !nowTiktok && !wantFacebook && !nowInstagram) {
+    // Held-only: nothing to run now; the temp upload is just a copy source.
+    cleanup();
+    res.json({ scheduleIds });
+    return;
+  }
+
   const jobId = uuidv4();
-  createJob(jobId, wantYoutube, wantTiktok, wantFacebook, wantInstagram);
+  createJob(jobId, wantYoutube, nowTiktok, wantFacebook, nowInstagram);
   pruneJobs();
 
   const filePath = req.file.path;
@@ -107,14 +170,15 @@ router.post("/", upload.single("video"), (req, res) => {
     userId,
     filePath,
     wantYoutube,
-    wantTiktok,
+    wantTiktok: nowTiktok,
     wantFacebook,
-    wantInstagram,
+    wantInstagram: nowInstagram,
     title: baseTitle,
     description,
+    publishAtMs,
   });
 
-  res.json({ jobId });
+  res.json(scheduleIds.length ? { jobId, scheduleIds } : { jobId });
 });
 
 router.get("/jobs/:id", (req, res) => {
@@ -127,67 +191,3 @@ router.get("/jobs/:id", (req, res) => {
 });
 
 export default router;
-
-async function runUploadJob(args: {
-  jobId: string;
-  userId: string;
-  filePath: string;
-  wantYoutube: boolean;
-  wantTiktok: boolean;
-  wantFacebook: boolean;
-  wantInstagram: boolean;
-  title: string;
-  description: string;
-}): Promise<void> {
-  const { jobId, userId, filePath, wantYoutube, wantTiktok, wantFacebook, wantInstagram, title, description } = args;
-
-  const tasks: Promise<void>[] = [];
-
-  if (wantYoutube) {
-    tasks.push(
-      (async () => {
-        updatePlatform(jobId, "youtube", { status: "uploading" });
-        try {
-          const videoId = await uploadToYoutube(userId, filePath, title, description);
-          updatePlatform(jobId, "youtube", { status: "done", videoId });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          updatePlatform(jobId, "youtube", { status: "error", error: msg });
-        }
-      })()
-    );
-  }
-
-  if (wantTiktok) {
-    tasks.push(
-      (async () => {
-        updatePlatform(jobId, "tiktok", { status: "uploading" });
-        try {
-          const { publishId } = await uploadToTiktok(userId, filePath, title);
-          const { accessToken } = await getValidTikTokAccessToken(userId);
-          await waitForTiktokPublish(accessToken, publishId);
-          updatePlatform(jobId, "tiktok", { status: "done", publishId });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          updatePlatform(jobId, "tiktok", { status: "error", error: msg });
-        }
-      })()
-    );
-  }
-
-  for (const platform of ["facebook", "instagram"] as const) {
-    if (!(platform === "facebook" ? wantFacebook : wantInstagram)) continue;
-    tasks.push((async () => {
-      updatePlatform(jobId, platform, { status: "uploading" });
-      try {
-        const videoId = await uploadToMeta(platform, userId, filePath, title);
-        updatePlatform(jobId, platform, { status: "done", videoId });
-      } catch (error) {
-        updatePlatform(jobId, platform, { status: "error", error: error instanceof Error ? error.message : "Upload failed" });
-      }
-    })());
-  }
-  await Promise.allSettled(tasks);
-
-  fs.unlink(filePath, () => {});
-}

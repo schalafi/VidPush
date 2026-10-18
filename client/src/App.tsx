@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
+  cancelScheduled,
   connectGoogle,
   connectMeta,
   startFacebookConnection,
@@ -13,13 +14,25 @@ import {
   getAuthStatus,
   getJob,
   getSession,
+  listScheduled,
   logout,
   unlock,
-  uploadVideo,
+  updateScheduledTime,
+  uploadVideoXHR,
   type AuthStatus,
   type PlatformState,
+  type ScheduledItem,
   type UploadJob,
 } from "./api";
+import {
+  formatLocal,
+  formatSize,
+  localInputToUtcMs,
+  utcMsToLocalInput,
+  validateQueueFile,
+  validateSchedule,
+  type ScheduleDests,
+} from "./schedule";
 import "./App.css";
 
 function formatPlatformStatus(p: PlatformState): string {
@@ -34,6 +47,39 @@ function formatPlatformStatus(p: PlatformState): string {
   return p.error ? `Error: ${p.error}` : "Error";
 }
 
+type QueueItem = {
+  key: string;
+  file: File;
+  title: string;
+  scheduleLocal: string;
+  status: "queued" | "uploading" | "done" | "error";
+  progress: number;
+  error: string | null;
+  jobId: string | null;
+  note: string | null;
+};
+
+function Thumb({ file }: { file: File }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  if (!url || failed) return <div className="thumb thumb-fallback" aria-hidden="true">No preview</div>;
+  return (
+    <video
+      className="thumb"
+      src={url}
+      preload="metadata"
+      muted
+      playsInline
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export default function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -45,16 +91,18 @@ export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authErr, setAuthErr] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState("");
   const [youtubeOn, setYoutubeOn] = useState(true);
   const [tiktokOn, setTiktokOn] = useState(true);
   const [facebookOn, setFacebookOn] = useState(false);
   const [instagramOn, setInstagramOn] = useState(false);
   const [banner, setBanner] = useState<{ kind: "ok" | "err" | "info"; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [job, setJob] = useState<UploadJob | null>(null);
   const [drag, setDrag] = useState(false);
+  const [items, setItems] = useState<QueueItem[]>([]);
+  const [jobs, setJobs] = useState<Record<string, UploadJob>>({});
+  const [scheduled, setScheduled] = useState<ScheduledItem[]>([]);
+  const [scheduledErr, setScheduledErr] = useState<string | null>(null);
+  const keySeq = useRef(0);
+  const dests: ScheduleDests = { youtube: youtubeOn, tiktok: tiktokOn, facebook: facebookOn, instagram: instagramOn };
   const [facebookConnection, setFacebookConnection] = useState<{ id: string; url: string } | null>(null);
   const [facebookStarting, setFacebookStarting] = useState(false);
 
@@ -175,7 +223,9 @@ export default function App() {
     }
     setAuthenticated(false);
     setAuth(null);
-    setJob(null);
+    setItems([]);
+    setJobs({});
+    setScheduled([]);
     setBanner(null);
   };
 
@@ -206,41 +256,58 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!job?.id) return;
-    let cancelled = false;
-    const t = window.setInterval(async () => {
-      try {
-        const j = await getJob(job.id);
-        if (cancelled) return;
-        setJob(j);
-        const states = [j.youtube, j.tiktok, j.facebook, j.instagram];
-        const stillRunning = states.some(p => p.status === "queued" || p.status === "uploading");
-        if (!stillRunning) {
-          window.clearInterval(t);
-          cancelled = true;
-          const failed = states.some(p => p.status === "error");
-          if (failed) {
-            setBanner({ kind: "err", text: "Upload finished with errors. Review the results below before retrying." });
-          } else {
-            setFile(null);
-            setTitle("");
-            if (fileInput.current) fileInput.current.value = "";
-            setBanner({ kind: "ok", text: "Upload complete. Choose another video when you’re ready." });
-          }
-        }
-      } catch {
-        /* ignore transient */
+  const refreshScheduled = useCallback(async () => {
+    try {
+      setScheduledErr(null);
+      setScheduled(await listScheduled());
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setScheduledErr("Could not load scheduled videos.");
       }
-    }, 600);
-    return () => {
-      cancelled = true;
-      window.clearInterval(t);
-    };
-  }, [job?.id]);
+    }
+  }, []);
 
-  const uploading = busy || Boolean(job && [job.youtube.status, job.tiktok.status, job.facebook.status, job.instagram.status]
-    .some(status => status === "queued" || status === "uploading"));
+  useEffect(() => {
+    if (!authenticated) return;
+    void refreshScheduled();
+    const t = window.setInterval(() => void refreshScheduled(), 15000);
+    return () => window.clearInterval(t);
+  }, [authenticated, refreshScheduled]);
+
+  const itemsRef = useRef<QueueItem[]>([]);
+  itemsRef.current = items;
+
+  // Poll every live job until its platforms settle.
+  useEffect(() => {
+    const t = window.setInterval(async () => {
+      const live = itemsRef.current.filter(i => i.jobId && i.status === "uploading");
+      if (!live.length) return;
+      for (const item of live) {
+        try {
+          const j = await getJob(item.jobId!);
+          setJobs(prev => ({ ...prev, [j.id]: j }));
+          const states = [j.youtube, j.tiktok, j.facebook, j.instagram];
+          const active = states.filter(p => p.status === "queued" || p.status === "uploading");
+          if (active.length) continue;
+          const failed = states.filter(p => p.status === "error");
+          setItems(prev => prev.map(it => {
+            if (it.key !== item.key) return it;
+            if (!failed.length) return { ...it, status: "done" as const };
+            return {
+              ...it,
+              status: "error" as const,
+              error: failed.map(p => p.error ?? "Upload failed").join(" "),
+            };
+          }));
+        } catch {
+          /* ignore transient */
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const anyUploading = items.some(i => i.status === "uploading");
 
   const selectedCount = [youtubeOn, tiktokOn, facebookOn, instagramOn].filter(Boolean).length;
   const anyOn = selectedCount > 0;
@@ -259,55 +326,142 @@ export default function App() {
     setInstagramOn(false);
   };
 
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDrag(false);
-    if (uploading) return;
-    const f = e.dataTransfer.files?.[0];
-    if (f) {
-      setFile(f);
-      setBanner(null);
-    }
-  };
-
-  const validationMessage = useMemo(() => {
+  const connectionError = (): string | null => {
     if (!anyOn) return "Turn on at least one destination.";
     if (youtubeOn && !auth?.youtube) return "Connect YouTube first.";
     if (tiktokOn && !auth?.tiktok) return "Connect TikTok first.";
     if (facebookOn && !auth?.facebook.connected) return "Connect Facebook and choose a Page first.";
     if (instagramOn && !auth?.instagram.connected) return "Connect Instagram first.";
-    if (!file) return "Choose a video file.";
-    if ((facebookOn || instagramOn) && (!/\.(mp4|mov)$/i.test(file.name) || file.size > 1024 ** 3)) return "For Facebook/Instagram, choose an MP4 or MOV up to 1 GB.";
-    if (instagramOn && title.length > 2200) return "Instagram captions must be at most 2,200 characters.";
     return null;
-  }, [anyOn, auth, file, tiktokOn, youtubeOn, facebookOn, instagramOn, title]);
+  };
 
-  const canUpload = !validationMessage && !uploading;
+  const patchItem = (key: string, patch: Partial<QueueItem>) =>
+    setItems(prev => prev.map(it => (it.key === key ? { ...it, ...patch } : it)));
 
-  const onUpload = async () => {
-    if (!file || validationMessage || uploading) return;
-    setBusy(true);
-    setBanner(null);
-    setJob(null);
+  const addFiles = (files: FileList | File[] | null) => {
+    if (!files) return;
+    const fresh: QueueItem[] = [];
+    for (const f of Array.from(files)) {
+      keySeq.current += 1;
+      fresh.push({
+        key: `${Date.now()}-${keySeq.current}`,
+        file: f,
+        title: f.name.replace(/\.[^.]+$/, ""),
+        scheduleLocal: "",
+        status: "queued",
+        progress: 0,
+        error: null,
+        jobId: null,
+        note: null,
+      });
+    }
+    if (fresh.length) {
+      setItems(prev => [...prev, ...fresh]);
+      setBanner(null);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDrag(false);
+    addFiles(e.dataTransfer.files);
+  };
+
+  const removeItem = (key: string) =>
+    setItems(prev => prev.filter(it => (it.key === key ? it.status !== "uploading" : true)));
+
+  const clearDone = () => setItems(prev => prev.filter(it => it.status === "uploading" || it.status === "queued"));
+
+  const startItem = async (key: string) => {
+    const item = itemsRef.current.find(i => i.key === key);
+    if (!item || item.status === "uploading") return;
+    const conn = connectionError();
+    if (conn) {
+      setBanner({ kind: "err", text: conn });
+      return;
+    }
+    const hasSchedule = item.scheduleLocal.trim() !== "";
+    const publishAtMs = localInputToUtcMs(item.scheduleLocal);
+    if (hasSchedule && publishAtMs === null) {
+      patchItem(key, { status: "error", error: "Schedule time is not a valid date and time." });
+      return;
+    }
+    const schedErr = validateSchedule(publishAtMs, dests);
+    if (schedErr) {
+      patchItem(key, { status: "error", error: schedErr });
+      return;
+    }
+    const fileErr = validateQueueFile(item.file, dests, item.title.trim());
+    if (fileErr) {
+      patchItem(key, { status: "error", error: fileErr });
+      return;
+    }
+    patchItem(key, { status: "uploading", progress: 0, error: null, note: null, jobId: null });
     try {
       const fd = new FormData();
-      fd.append("video", file);
+      fd.append("video", item.file);
       fd.append("youtube", String(youtubeOn));
       fd.append("tiktok", String(tiktokOn));
       fd.append("facebook", String(facebookOn));
       fd.append("instagram", String(instagramOn));
-      if (title.trim()) {
-        fd.append("title", title.trim());
+      if (item.title.trim()) fd.append("title", item.title.trim());
+      if (publishAtMs !== null) fd.append("publishAt", new Date(publishAtMs).toISOString());
+      const result = await uploadVideoXHR(fd, pct => patchItem(key, { progress: pct }));
+      if (result.jobId) {
+        const initial = await getJob(result.jobId);
+        setJobs(prev => ({ ...prev, [initial.id]: initial }));
+        patchItem(key, { jobId: result.jobId });
       }
-      const { jobId } = await uploadVideo(fd);
-      const initial = await getJob(jobId);
-      setJob(initial);
-      setBanner({ kind: "info", text: "Upload started. Progress updates below." });
+      const held = result.scheduleIds?.length ?? 0;
+      const when = publishAtMs !== null ? formatLocal(publishAtMs) : null;
+      let note: string;
+      if (result.jobId && held) {
+        note = when
+          ? `Upload finished. ${held === 1 ? "TikTok/Instagram video" : `${held} videos`} held by VidPush for ${when}.`
+          : "Upload finished.";
+      } else if (result.jobId && when) {
+        note = `Uploaded and scheduled natively for ${when}.`;
+      } else if (result.jobId) {
+        note = "Upload finished.";
+      } else {
+        note = when ? `Held by VidPush for ${when}. See Scheduled below.` : "Held by VidPush. See Scheduled below.";
+        patchItem(key, { status: "done", progress: 100, note });
+      }
+      if (result.jobId) patchItem(key, { note });
+      if (held) void refreshScheduled();
     } catch (e) {
-      setBanner({ kind: "err", text: e instanceof Error ? e.message : "Upload failed" });
-    } finally {
-      setBusy(false);
+      if (e instanceof ApiError && e.status === 401) {
+        setAuthenticated(false);
+        setAuth(null);
+        return;
+      }
+      patchItem(key, { status: "error", error: e instanceof Error ? e.message : "Upload failed" });
     }
+  };
+
+  const startAll = () => {
+    const conn = connectionError();
+    if (conn) {
+      setBanner({ kind: "err", text: conn });
+      return;
+    }
+    const queued = itemsRef.current.filter(i => i.status === "queued" || i.status === "error");
+    if (!queued.length) return;
+    setBanner({ kind: "info", text: `Uploading ${queued.length === 1 ? "1 video" : `${queued.length} videos`}. Progress shows on each row.` });
+    // At most two concurrent uploads; the rest start as slots free.
+    let active = 0;
+    let index = 0;
+    const next = (): void => {
+      while (active < 2 && index < queued.length) {
+        const item = queued[index++];
+        active += 1;
+        void startItem(item.key).finally(() => {
+          active -= 1;
+          next();
+        });
+      }
+    };
+    next();
   };
 
   if (!sessionChecked) {
@@ -386,7 +540,7 @@ export default function App() {
         <div>
           <h1 className="title">VidPush</h1>
           <p className="subtitle">
-            Drop one video and publish to YouTube, TikTok, Facebook, and Instagram.
+            Drop videos and publish to YouTube, TikTok, Facebook, and Instagram.
             Connect each destination separately.
           </p>
         </div>
@@ -422,13 +576,13 @@ export default function App() {
                 </span>
               </div>
               <div className="row-actions">
-                <button type="button" className="btn primary" disabled={uploading} onClick={() => connectGoogle()}>
+                <button type="button" className="btn primary" disabled={anyUploading} onClick={() => connectGoogle()}>
                   Connect
                 </button>
                 <button
                   type="button"
                   className="btn ghost danger"
-                  disabled={uploading || !auth?.youtube}
+                  disabled={anyUploading || !auth?.youtube}
                   onClick={() => void disconnectGoogle().then(refreshAuth).catch(e => setBanner({ kind: "err", text: e.message }))}
                 >
                   Disconnect
@@ -443,13 +597,13 @@ export default function App() {
                 </span>
               </div>
               <div className="row-actions">
-                <button type="button" className="btn primary" disabled={uploading} onClick={() => connectTiktok()}>
+                <button type="button" className="btn primary" disabled={anyUploading} onClick={() => connectTiktok()}>
                   Connect
                 </button>
                 <button
                   type="button"
                   className="btn ghost danger"
-                  disabled={uploading || !auth?.tiktok}
+                  disabled={anyUploading || !auth?.tiktok}
                   onClick={() => void disconnectTiktok().then(refreshAuth).catch(e => setBanner({ kind: "err", text: e.message }))}
                 >
                   Disconnect
@@ -467,8 +621,8 @@ export default function App() {
                   </span>
                 </div>
                 <div className="row-actions">
-                  <button type="button" className="btn primary" disabled={uploading || !connection?.configured || (platform === "facebook" && facebookStarting)} onClick={() => platform === "facebook" ? void onConnectFacebook() : connectMeta(platform)} aria-label={platform === "facebook" ? "Connect Facebook (opens in a new tab)" : "Connect Instagram"}>Connect{platform === "facebook" ? " ↗" : ""}</button>
-                  <button type="button" className="btn ghost danger" disabled={uploading || (!connection?.accountId && !(platform === "facebook" && auth?.facebookPages.length))}
+                  <button type="button" className="btn primary" disabled={anyUploading || !connection?.configured || (platform === "facebook" && facebookStarting)} onClick={() => platform === "facebook" ? void onConnectFacebook() : connectMeta(platform)} aria-label={platform === "facebook" ? "Connect Facebook (opens in a new tab)" : "Connect Instagram"}>Connect{platform === "facebook" ? " ↗" : ""}</button>
+                  <button type="button" className="btn ghost danger" disabled={anyUploading || (!connection?.accountId && !(platform === "facebook" && auth?.facebookPages.length))}
                     onClick={() => void disconnectMeta(platform).then(refreshAuth).catch(e => setBanner({ kind: "err", text: e.message }))}>Disconnect</button>
                 </div>
               </div>;
@@ -481,7 +635,7 @@ export default function App() {
             </div>}
             {Boolean(auth?.facebookPages.length) && <div className="field">
               <label htmlFor="facebook-page">Publish to Facebook Page</label>
-              <select id="facebook-page" disabled={uploading} value={auth?.facebook.accountId ?? ""}
+              <select id="facebook-page" disabled={anyUploading} value={auth?.facebook.accountId ?? ""}
                 onChange={e => void selectFacebookPage(e.target.value).then(refreshAuth).catch(error => setBanner({ kind: "err", text: error.message }))}>
                 <option value="" disabled>Choose a Page</option>
                 {auth?.facebookPages.map(page => <option key={page.id} value={page.id}>{page.name}</option>)}
@@ -494,10 +648,10 @@ export default function App() {
         <section className="card">
           <h2>Destinations</h2>
           <div className="master-actions">
-            <button type="button" className="btn" disabled={uploading} onClick={selectAll}>
+            <button type="button" className="btn" disabled={anyUploading} onClick={selectAll}>
               Select all
             </button>
-            <button type="button" className="btn" disabled={uploading} onClick={deselectAll}>
+            <button type="button" className="btn" disabled={anyUploading} onClick={deselectAll}>
               Deselect all
             </button>
             <span className="hint">{`${selectedCount} selected`}</span>
@@ -509,7 +663,7 @@ export default function App() {
             <label className="switch">
               <input
                 type="checkbox"
-                disabled={uploading}
+                disabled={anyUploading}
                 checked={youtubeOn}
                 onChange={(e) => setYoutubeOn(e.target.checked)}
                 aria-labelledby="yt-label"
@@ -524,7 +678,7 @@ export default function App() {
             <label className="switch">
               <input
                 type="checkbox"
-                disabled={uploading}
+                disabled={anyUploading}
                 checked={tiktokOn}
                 onChange={(e) => setTiktokOn(e.target.checked)}
                 aria-labelledby="tt-label"
@@ -537,10 +691,24 @@ export default function App() {
             { id: "instagram", name: "Instagram Reels", on: instagramOn, set: setInstagramOn }]).map(platform =>
             <div className="toggle-row" key={platform.id}>
               <span id={`${platform.id}-label`} className="toggle-label">{platform.name}</span>
-              <label className="switch"><input type="checkbox" disabled={uploading} checked={platform.on}
+              <label className="switch"><input type="checkbox" disabled={anyUploading} checked={platform.on}
                 onChange={e => platform.set(e.target.checked)} aria-labelledby={`${platform.id}-label`} /><span className="slider" /></label>
             </div>)}
           {(facebookOn || instagramOn) && <p className="hint">Selected Meta destinations publish Reels to the accounts shown above. Use a vertical MP4 or MOV. The title becomes the caption.</p>}
+          {tiktokOn && (
+            <p className="hint" role="note">
+              TikTok note: this app is not reviewed by TikTok, so each video publishes privately
+              and your TikTok account must be private when it goes out. Afterwards, switch your
+              account to public and set each video to Everyone in the TikTok app.
+            </p>
+          )}
+          {instagramOn && !auth?.instagram.connected && (
+            <p className="hint" role="note">
+              New to Instagram here? Create a professional (Business or Creator) Instagram account
+              linked to a Facebook Page, then press Connect above.
+            </p>
+          )}
+          <h3 className="subhead">Videos</h3>
           <div
             className={`dropzone ${drag ? "drag" : ""}`}
             role="button"
@@ -561,66 +729,239 @@ export default function App() {
               (document.getElementById("file-input") as HTMLInputElement | null)?.click()
             }
           >
-            <strong>{file ? file.name : "Drop video here"}</strong>
-            <p>{file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : "or click to browse"}</p>
+            <strong>Drop videos here</strong>
+            <p>or click to browse — one or more at a time</p>
             <input
               ref={fileInput}
-              disabled={uploading}
               id="file-input"
               type="file"
               accept="video/*"
+              multiple
               style={{ display: "none" }}
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) setFile(f);
+                addFiles(e.target.files);
+                e.target.value = "";
               }}
             />
           </div>
-          <p className="file-hint">Up to 5 GB; up to 1 GB when Facebook or Instagram is selected. Each platform also checks its video requirements.</p>
+          <p className="file-hint">Up to 5 GB each; up to 1 GB and MP4/MOV when Facebook or Instagram is selected. Each platform also checks its video requirements.</p>
 
-          <div className="field">
-            <label htmlFor="title-input">Title / caption (optional)</label>
-            <input
-              disabled={uploading}
-              id="title-input"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Defaults to file name"
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="upload-actions">
-            <button type="button" className="btn primary" disabled={!canUpload} onClick={() => void onUpload()}>
-              {busy ? "Starting…" : uploading ? "Uploading…" : "Upload"}
-            </button>
-            {validationMessage && <span className="hint">{validationMessage}</span>}
-          </div>
-
-          {job && (
-            <div className="progress-block">
-              <div className="platform-status">
-                <strong>YouTube</strong>
-                <span
-                  className={`status-line ${job.youtube.status === "error" ? "err" : ""}`}
-                >
-                  {formatPlatformStatus(job.youtube)}
-                </span>
-              </div>
-              {(["facebook", "instagram"] as const).map(platform => <div className="platform-status" key={platform}>
-                <strong>{platform === "facebook" ? "Facebook" : "Instagram"}</strong>
-                <span className={`status-line ${job[platform].status === "error" ? "err" : ""}`}>{formatPlatformStatus(job[platform])}</span>
-              </div>)}
-              <div className="platform-status">
-                <strong>TikTok</strong>
-                <span className={`status-line ${job.tiktok.status === "error" ? "err" : ""}`}>
-                  {formatPlatformStatus(job.tiktok)}
-                </span>
-              </div>
+          {items.length > 0 && (
+            <div className="queue">
+              {items.map(item => {
+                const job = item.jobId ? jobs[item.jobId] : undefined;
+                const states = job
+                  ? ([["YouTube", job.youtube], ["TikTok", job.tiktok], ["Facebook", job.facebook], ["Instagram", job.instagram]] as [string, PlatformState][])
+                      .filter(([, p]) => p.status !== "idle")
+                  : [];
+                const locked = item.status === "uploading";
+                return (
+                  <div className="queue-item" key={item.key}>
+                    <Thumb file={item.file} />
+                    <div className="queue-main">
+                      <div className="queue-head">
+                        <strong className="queue-name">{item.file.name}</strong>
+                        <span className="hint">{formatSize(item.file.size)}</span>
+                      </div>
+                      <div className="field">
+                        <label htmlFor={`title-${item.key}`}>Title / caption</label>
+                        <input
+                          id={`title-${item.key}`}
+                          disabled={locked}
+                          value={item.title}
+                          onChange={(e) => patchItem(item.key, { title: e.target.value })}
+                          placeholder="Defaults to file name"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div className="field">
+                        <label htmlFor={`sched-${item.key}`}>Publish at (your local time — empty means now)</label>
+                        <input
+                          id={`sched-${item.key}`}
+                          type="datetime-local"
+                          disabled={locked}
+                          value={item.scheduleLocal}
+                          onChange={(e) => patchItem(item.key, { scheduleLocal: e.target.value })}
+                        />
+                      </div>
+                      {item.status === "uploading" && (
+                        <div className="progress" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${item.file.name}`}>
+                          <div className="progress-track">
+                            <div className="progress-bar" style={{ width: `${item.progress}%` }} />
+                          </div>
+                          <span className="hint">{item.progress}%</span>
+                        </div>
+                      )}
+                      {item.note && <p className="hint">{item.note}</p>}
+                      {item.error && <div className="banner error" role="alert">{item.error}</div>}
+                      {states.length > 0 && (
+                        <div className="progress-block">
+                          {states.map(([name, p]) => (
+                            <div className="platform-status" key={name}>
+                              <strong>{name}</strong>
+                              <span className={`status-line ${p.status === "error" ? "err" : ""}`}>{formatPlatformStatus(p)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="row-actions">
+                        {(item.status === "queued" || item.status === "error") && (
+                          <button type="button" className="btn primary" onClick={() => void startItem(item.key)}>
+                            {item.status === "error" ? "Retry" : item.scheduleLocal.trim() ? "Schedule" : "Upload"}
+                          </button>
+                        )}
+                        {!locked && (
+                          <button type="button" className="btn ghost" onClick={() => removeItem(item.key)}>
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
+
+          <div className="upload-actions">
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!items.some(i => i.status === "queued" || i.status === "error")}
+              onClick={startAll}
+            >
+              {anyUploading ? "Uploading…" : "Start all"}
+            </button>
+            {items.some(i => i.status === "done" || i.status === "error") && (
+              <button type="button" className="btn ghost" disabled={anyUploading} onClick={clearDone}>
+                Clear finished
+              </button>
+            )}
+          </div>
         </section>
       </div>
+
+      <section className="card scheduled-card">
+        <h2>Scheduled</h2>
+        <p className="hint">
+          YouTube and Facebook schedule directly on the platform at upload time. TikTok and
+          Instagram videos are held here by VidPush and publish at their time — the server must
+          be running when the time arrives.
+        </p>
+        {scheduledErr && <div className="banner error" role="alert">{scheduledErr}</div>}
+        {scheduled.length === 0 ? (
+          <p className="hint">Nothing scheduled yet. Pick a publish time on a video above.</p>
+        ) : (
+          <div className="scheduled-list">
+            {scheduled.map(row => (
+              <ScheduledRow key={row.id} row={row} onChanged={() => void refreshScheduled()} />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+const DEST_LABELS: [keyof ScheduledItem["destinations"], string][] = [
+  ["youtube", "YouTube"],
+  ["tiktok", "TikTok"],
+  ["facebook", "Facebook"],
+  ["instagram", "Instagram"],
+];
+
+function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(utcMsToLocalInput(new Date(row.publishAt).getTime()));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const destNames = DEST_LABELS.filter(([k]) => row.destinations[k]).map(([, label]) => label);
+
+  const onSave = async () => {
+    const ms = localInputToUtcMs(value);
+    if (ms === null) {
+      setErr("Schedule time is not a valid date and time.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await updateScheduledTime(row.id, new Date(ms).toISOString());
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not change the scheduled time");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onCancel = async () => {
+    if (!window.confirm(`Cancel the scheduled publish of ${row.originalName}?`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await cancelScheduled(row.id);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not cancel the scheduled video");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="scheduled-row">
+      <div className="scheduled-meta">
+        <strong className="queue-name">{row.title || row.originalName}</strong>
+        <span className="hint">{formatSize(row.size)} · {destNames.join(", ") || "No destinations"}</span>
+        <span className="hint">Publishes {formatLocal(row.publishAt)} (your local time)</span>
+        <span className={`pill ${row.status === "scheduled" ? "on" : "off"}`}>{row.status}</span>
+        {row.error && <div className="banner error" role="alert">{row.error}</div>}
+        {row.destinations.tiktok && row.status === "scheduled" && (
+          <p className="hint" role="note">
+            TikTok publishes privately (unreviewed app — your account must be private at publish
+            time). Afterwards, switch your account to public and set the video to Everyone in the
+            TikTok app.
+          </p>
+        )}
+        {editing && (
+          <div className="field">
+            <label htmlFor={`edit-${row.id}`}>New publish time (your local time)</label>
+            <input
+              id={`edit-${row.id}`}
+              type="datetime-local"
+              disabled={busy}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          </div>
+        )}
+        {err && <div className="banner error" role="alert">{err}</div>}
+      </div>
+      {row.status === "scheduled" && (
+        <div className="row-actions">
+          {editing ? (
+            <>
+              <button type="button" className="btn primary" disabled={busy} onClick={() => void onSave()}>
+                Save
+              </button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => { setEditing(false); setErr(null); }}>
+                Back
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn" disabled={busy} onClick={() => { setEditing(true); setErr(null); }}>
+                Edit time
+              </button>
+              <button type="button" className="btn ghost danger" disabled={busy} onClick={() => void onCancel()}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

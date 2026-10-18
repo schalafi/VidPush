@@ -8,6 +8,8 @@ import { requireAuthConfigured, requireAuth } from "./middleware/apiAuth.js";
 import metaAuthRoutes from "./routes/metaAuth.js";
 import authRoutes from "./routes/auth.js";
 import uploadRoutes from "./routes/upload.js";
+import scheduledRoutes from "./routes/scheduled.js";
+import { startScheduler } from "./scheduler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 requireAuthConfigured();
@@ -45,6 +47,8 @@ app.use((req, res, next) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", metaAuthRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/scheduled", scheduledRoutes);
+startScheduler();
 app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
 if (process.env.NODE_ENV === "production") {
   app.get("*", (_req, res) => res.sendFile(path.join(clientDir, "index.html")));

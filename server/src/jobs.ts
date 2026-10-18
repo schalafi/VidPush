@@ -1,4 +1,12 @@
+import fs from "fs";
 import type { OauthProvider } from "./db.js";
+import { uploadToYoutube } from "./services/youtubeUpload.js";
+import { getValidTikTokAccessToken } from "./services/tiktokTokens.js";
+import {
+  uploadToTiktok,
+  waitForTiktokPublish,
+} from "./services/tiktokUpload.js";
+import { uploadToMeta } from "./services/metaUpload.js";
 
 export type PlatformState = {
   status: "idle" | "queued" | "uploading" | "done" | "error";
@@ -59,4 +67,75 @@ export function pruneJobs(): void {
     const job = jobs.get(id)!;
     if (![job.youtube, job.tiktok, job.facebook, job.instagram].some(p => ["queued", "uploading"].includes(p.status))) jobs.delete(id);
   }
+}
+
+/**
+ * Run the platform uploads for a job. Shared by the immediate upload route
+ * and the hold-and-post scheduler. publishAtMs schedules natively on
+ * platforms that support it (YouTube, Facebook); others ignore it.
+ * The file is deleted when all platform uploads settle.
+ */
+export async function runUploadJob(args: {
+  jobId: string;
+  userId: string;
+  filePath: string;
+  wantYoutube: boolean;
+  wantTiktok: boolean;
+  wantFacebook: boolean;
+  wantInstagram: boolean;
+  title: string;
+  description: string;
+  publishAtMs?: number;
+}): Promise<void> {
+  const { jobId, userId, filePath, wantYoutube, wantTiktok, wantFacebook, wantInstagram, title, description, publishAtMs } = args;
+
+  const tasks: Promise<void>[] = [];
+
+  if (wantYoutube) {
+    tasks.push(
+      (async () => {
+        updatePlatform(jobId, "youtube", { status: "uploading" });
+        try {
+          const videoId = await uploadToYoutube(userId, filePath, title, description, publishAtMs);
+          updatePlatform(jobId, "youtube", { status: "done", videoId });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          updatePlatform(jobId, "youtube", { status: "error", error: msg });
+        }
+      })()
+    );
+  }
+
+  if (wantTiktok) {
+    tasks.push(
+      (async () => {
+        updatePlatform(jobId, "tiktok", { status: "uploading" });
+        try {
+          const { publishId } = await uploadToTiktok(userId, filePath, title);
+          const { accessToken } = await getValidTikTokAccessToken(userId);
+          await waitForTiktokPublish(accessToken, publishId);
+          updatePlatform(jobId, "tiktok", { status: "done", publishId });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          updatePlatform(jobId, "tiktok", { status: "error", error: msg });
+        }
+      })()
+    );
+  }
+
+  for (const platform of ["facebook", "instagram"] as const) {
+    if (!(platform === "facebook" ? wantFacebook : wantInstagram)) continue;
+    tasks.push((async () => {
+      updatePlatform(jobId, platform, { status: "uploading" });
+      try {
+        const videoId = await uploadToMeta(platform, userId, filePath, title, platform === "facebook" ? publishAtMs : undefined);
+        updatePlatform(jobId, platform, { status: "done", videoId });
+      } catch (error) {
+        updatePlatform(jobId, platform, { status: "error", error: error instanceof Error ? error.message : "Upload failed" });
+      }
+    })());
+  }
+  await Promise.allSettled(tasks);
+
+  fs.unlink(filePath, () => {});
 }

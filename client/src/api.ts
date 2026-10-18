@@ -89,18 +89,96 @@ export async function disconnectTiktok(): Promise<void> {
   if (!res.ok) throw new Error("Failed to disconnect TikTok");
 }
 
-export async function uploadVideo(form: FormData): Promise<{ jobId: string }> {
+export type UploadResult = { jobId?: string; scheduleIds?: string[] };
+
+export async function uploadVideo(form: FormData): Promise<UploadResult> {
   const res = await api("/api/upload", { method: "POST", body: form });
-  const json = (await res.json()) as { jobId?: string; error?: string };
+  const json = (await res.json()) as { jobId?: string; scheduleIds?: string[]; error?: string };
   if (!res.ok) throw new Error(json.error ?? "Upload failed to start");
-  if (!json.jobId) throw new Error("No job id");
-  return { jobId: json.jobId };
+  if (!json.jobId && !json.scheduleIds?.length) throw new Error("No job id");
+  return { jobId: json.jobId, scheduleIds: json.scheduleIds };
+}
+
+/** Upload with live progress (fetch cannot report upload progress). */
+export function uploadVideoXHR(form: FormData, onProgress: (pct: number) => void): Promise<UploadResult> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)));
+    };
+    xhr.onload = () => {
+      let json: { jobId?: string; scheduleIds?: string[]; error?: string };
+      try {
+        json = JSON.parse(xhr.responseText);
+      } catch {
+        reject(new Error("Upload failed to start"));
+        return;
+      }
+      if (xhr.status === 401) {
+        reject(new ApiError(401, "Unauthorized"));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(json.error ?? "Upload failed to start"));
+        return;
+      }
+      if (!json.jobId && !json.scheduleIds?.length) {
+        reject(new Error("No job id"));
+        return;
+      }
+      onProgress(100);
+      resolve({ jobId: json.jobId, scheduleIds: json.scheduleIds });
+    };
+    xhr.onerror = () => reject(new Error("Upload failed to start. Is the server running?"));
+    xhr.send(form);
+  });
 }
 
 export async function getJob(jobId: string): Promise<UploadJob> {
   const res = await api(`/api/upload/jobs/${jobId}`);
   if (!res.ok) throw new Error("Job not found");
   return res.json() as Promise<UploadJob>;
+}
+
+export type ScheduledItem = {
+  id: string;
+  originalName: string;
+  size: number;
+  title: string;
+  destinations: { youtube?: boolean; tiktok?: boolean; facebook?: boolean; instagram?: boolean };
+  publishAt: string;
+  status: "scheduled" | "uploading" | "done" | "error" | "cancelled";
+  jobId: string | null;
+  error: string | null;
+  createdAt: number;
+};
+
+export async function listScheduled(): Promise<ScheduledItem[]> {
+  const res = await api("/api/scheduled");
+  if (!res.ok) throw new Error("Could not load scheduled videos");
+  const json = (await res.json()) as { items: ScheduledItem[] };
+  return json.items;
+}
+
+export async function updateScheduledTime(id: string, publishAt: string): Promise<ScheduledItem> {
+  const res = await api(`/api/scheduled/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ publishAt }),
+  });
+  const json = (await res.json()) as ScheduledItem & { error?: string };
+  if (!res.ok) throw new Error(json.error ?? "Could not change the scheduled time");
+  return json;
+}
+
+export async function cancelScheduled(id: string): Promise<void> {
+  const res = await api(`/api/scheduled/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const json = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(json?.error ?? "Could not cancel the scheduled video");
+  }
 }
 
 export function connectMeta(platform: "facebook" | "instagram"): void {

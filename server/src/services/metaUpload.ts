@@ -23,7 +23,7 @@ export async function waitForFacebook(token: string, video: string, wait = pause
   }
   throw new Error(`Facebook has not confirmed publication of video ${video}. Check the Page before retrying.`);
 }
-export async function uploadToMeta(platform: MetaPlatform, userId: string, filePath: string, caption: string): Promise<string> {
+export async function uploadToMeta(platform: MetaPlatform, userId: string, filePath: string, caption: string, publishAtMs?: number): Promise<string> {
   const { token, id } = await metaCredentials(userId, platform);
   if (platform === "instagram") {
     const container = await graph<{ id: string; uri: string }>(platform, `${id}/media`, token,
@@ -38,8 +38,15 @@ export async function uploadToMeta(platform: MetaPlatform, userId: string, fileP
   const video = await graph<{ video_id: string; upload_url: string }>(platform, `${id}/video_reels`, token, { upload_phase: "start" }, "POST");
   if (!video.video_id || !video.upload_url) throw new Error("Facebook did not return an upload destination");
   await uploadMetaBinary(video.upload_url, token, filePath);
-  const finished = await graph<{ success: boolean }>(platform, `${id}/video_reels`, token,
-    { upload_phase: "finish", video_id: video.video_id, video_state: "PUBLISHED", description: caption }, "POST");
+  // Native scheduling: SCHEDULED + Unix timestamp. Instagram has no such option.
+  const finishParams: Record<string, string> = {
+    upload_phase: "finish", video_id: video.video_id, video_state: "PUBLISHED", description: caption,
+  };
+  if (platform === "facebook" && publishAtMs) {
+    finishParams.video_state = "SCHEDULED";
+    finishParams.scheduled_publish_time = String(Math.floor(publishAtMs / 1000));
+  }
+  const finished = await graph<{ success: boolean }>(platform, `${id}/video_reels`, token, finishParams, "POST");
   if (!finished.success) throw new Error(`Facebook did not confirm publication of ${video.video_id}. Check the Page before retrying.`);
   await waitForFacebook(token, video.video_id);
   return video.video_id;

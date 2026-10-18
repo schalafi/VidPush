@@ -4,10 +4,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.DATA_DIR ?? path.join(__dirname, "..", "..", ".data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+const dataDirValue = process.env.DATA_DIR ?? path.join(__dirname, "..", "..", ".data");
+if (!fs.existsSync(dataDirValue)) fs.mkdirSync(dataDirValue, { recursive: true });
 
-const dbPath = path.join(dataDir, "vidpush.db");
+export function dataDir(): string {
+  return dataDirValue;
+}
+
+const dbPath = path.join(dataDirValue, "vidpush.db");
 export const db = new Database(dbPath);
 
 db.exec(`
@@ -43,7 +47,72 @@ db.exec(`CREATE TABLE IF NOT EXISTS facebook_pages (
   user_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, access_token TEXT NOT NULL,
   expires_at INTEGER, PRIMARY KEY (user_id, id)
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS scheduled_posts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  destinations TEXT NOT NULL,
+  publish_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  job_id TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL
+)`);
+
 export type OauthProvider = "youtube" | "tiktok" | "facebook" | "instagram";
+
+export type ScheduledStatus = "scheduled" | "uploading" | "done" | "error" | "cancelled";
+
+export type ScheduledRow = {
+  id: string;
+  user_id: string;
+  file_path: string;
+  original_name: string;
+  size: number;
+  title: string;
+  description: string;
+  destinations: string;
+  publish_at: number;
+  status: ScheduledStatus;
+  job_id: string | null;
+  error: string | null;
+  created_at: number;
+};
+
+export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "error">): ScheduledRow {
+  const full: ScheduledRow = { ...row, status: "scheduled", job_id: null, error: null };
+  db.prepare(
+    `INSERT INTO scheduled_posts (id, user_id, file_path, original_name, size, title, description, destinations, publish_at, status, job_id, error, created_at)
+     VALUES (@id, @user_id, @file_path, @original_name, @size, @title, @description, @destinations, @publish_at, @status, @job_id, @error, @created_at)`
+  ).run(full);
+  return full;
+}
+
+export function listScheduled(userId: string): ScheduledRow[] {
+  return db
+    .prepare("SELECT * FROM scheduled_posts WHERE user_id = ? ORDER BY publish_at ASC")
+    .all(userId) as ScheduledRow[];
+}
+
+export function getScheduled(id: string): ScheduledRow | undefined {
+  return db.prepare("SELECT * FROM scheduled_posts WHERE id = ?").get(id) as ScheduledRow | undefined;
+}
+
+export function updateScheduledTime(id: string, publishAt: number): void {
+  db.prepare("UPDATE scheduled_posts SET publish_at = ? WHERE id = ?").run(publishAt, id);
+}
+
+export function setScheduledState(id: string, status: ScheduledStatus, error: string | null = null): void {
+  db.prepare("UPDATE scheduled_posts SET status = ?, error = ? WHERE id = ?").run(status, error, id);
+}
+
+export function setScheduledJob(id: string, jobId: string): void {
+  db.prepare("UPDATE scheduled_posts SET job_id = ? WHERE id = ?").run(jobId, id);
+}
 
 export type OauthRow = {
   user_id: string;

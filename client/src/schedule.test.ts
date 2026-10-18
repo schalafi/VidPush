@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import { describe, expect, it } from "vitest";
+import {
+  formatSize,
+  localInputToUtcMs,
+  utcMsToLocalInput,
+  validateQueueFile,
+  validateSchedule,
+} from "./schedule";
+
+const dests = { youtube: false, tiktok: true, facebook: false, instagram: false };
+const noDests = { youtube: false, tiktok: false, facebook: false, instagram: false };
+
+describe("localInputToUtcMs", () => {
+  it("returns null for empty input (publish now)", () => {
+    expect(localInputToUtcMs("")).toBeNull();
+    expect(localInputToUtcMs("   ")).toBeNull();
+  });
+
+  it("parses local wall time and round-trips through utcMsToLocalInput", () => {
+    const ms = localInputToUtcMs("2026-10-20T14:30");
+    assert.ok(ms !== null);
+    expect(new Date(ms).getMinutes()).toBe(30);
+    expect(utcMsToLocalInput(ms)).toBe("2026-10-20T14:30");
+  });
+
+  it("returns null for garbage", () => {
+    expect(localInputToUtcMs("not-a-date")).toBeNull();
+  });
+});
+
+describe("validateSchedule", () => {
+  it("allows empty (publish now)", () => {
+    expect(validateSchedule(null, dests)).toBeNull();
+  });
+
+  it("rejects past times", () => {
+    expect(validateSchedule(Date.now() - 60_000, dests)).toBe("Schedule time must be in the future.");
+  });
+
+  it("enforces the Facebook 10-minute lead", () => {
+    const fb = { ...noDests, facebook: true };
+    expect(validateSchedule(Date.now() + 5 * 60_000, fb)).toBe(
+      "Facebook needs the scheduled time at least 10 minutes ahead."
+    );
+    expect(validateSchedule(Date.now() + 30 * 24 * 3600_000, fb)).toBe(
+      "Facebook can schedule up to 29 days ahead."
+    );
+    expect(validateSchedule(Date.now() + 3600_000, fb)).toBeNull();
+  });
+
+  it("caps held TikTok/Instagram items at 90 days", () => {
+    expect(validateSchedule(Date.now() + 91 * 24 * 3600_000, dests)).toBe(
+      "TikTok and Instagram can be scheduled up to 90 days ahead."
+    );
+    expect(validateSchedule(Date.now() + 3600_000, dests)).toBeNull();
+  });
+});
+
+describe("validateQueueFile", () => {
+  const mp4 = (name: string, size: number, type = "video/mp4") =>
+    ({ name, size, type }) as File;
+
+  it("rejects non-video files by name", () => {
+    expect(validateQueueFile(mp4("notes.txt", 100, "text/plain"), noDests, "t")).toBe(
+      "notes.txt: this does not look like a video file. Choose an MP4, MOV, WebM, or MKV."
+    );
+  });
+
+  it("rejects empty files", () => {
+    expect(validateQueueFile(mp4("clip.mp4", 0), noDests, "t")).toBe("clip.mp4: the file is empty.");
+  });
+
+  it("applies the Meta MP4/MOV 1 GB rule only when Meta is selected", () => {
+    const big = mp4("clip.mkv", 2 * 1024 ** 3);
+    expect(validateQueueFile(big, { ...noDests, facebook: true }, "t")).toBe(
+      "clip.mkv: Facebook/Instagram need an MP4 or MOV up to 1 GB."
+    );
+    expect(validateQueueFile(big, noDests, "t")).toBeNull();
+  });
+
+  it("caps general files at 5 GB", () => {
+    expect(validateQueueFile(mp4("big.mp4", 6 * 1024 ** 3), noDests, "t")).toBe(
+      "big.mp4: files must be up to 5 GB."
+    );
+  });
+});
+
+describe("formatSize", () => {
+  it("formats bytes through gigabytes", () => {
+    expect(formatSize(500)).toBe("500 B");
+    expect(formatSize(2048)).toBe("2.0 KB");
+    expect(formatSize(5 * 1024 * 1024)).toBe("5.00 MB");
+    expect(formatSize(2 * 1024 ** 3)).toBe("2.00 GB");
+  });
+});

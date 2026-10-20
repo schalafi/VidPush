@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSize,
   localInputToUtcMs,
+  longUploadWarning,
   utcMsToLocalInput,
   validateQueueFile,
   validateSchedule,
@@ -83,6 +84,20 @@ describe("validateQueueFile", () => {
     expect(validateQueueFile(mp4("big.mp4", 6 * 1024 ** 3), noDests, "t")).toBe(
       "big.mp4: files must be up to 5 GB."
     );
+  });
+});
+
+describe("longUploadWarning", () => {
+  const mp4 = (name: string, size: number) => ({ name, size, type: "video/mp4" }) as File;
+
+  it("stays silent for short clips", () => {
+    expect(longUploadWarning(mp4("clip.mp4", 50 * 1024 * 1024))).toBeNull();
+  });
+
+  it("warns for unusually large files without blocking them", () => {
+    const warn = longUploadWarning(mp4("long.mp4", 600 * 1024 * 1024));
+    assert.ok(warn !== null);
+    expect(warn).toContain("short clips");
   });
 });
 

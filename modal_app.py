@@ -43,10 +43,12 @@ image = image.run_commands("npm run build").env({
         "GOOGLE_LOGIN_REDIRECT_URI", "GOOGLE_ALLOWED_EMAIL",
     ])],
     volumes={"/data": data},
-    # SQLite and the in-memory upload queue require one writer. Keep it warm
-    # so background uploads continue after the upload request returns.
-    min_containers=1,
+    # Single writer (SQLite plus in-memory queue). Scale to zero when idle,
+    # but keep idle containers up to 15 minutes so short clip uploads can
+    # finish. Long videos may not survive scale-down; the UI warns over 500 MB.
+    min_containers=0,
     max_containers=1,
+    scaledown_window=900,
     cpu=0.5,
     memory=1024,
     timeout=3600,

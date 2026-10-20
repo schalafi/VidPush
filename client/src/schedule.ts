@@ -49,6 +49,17 @@ export function validateSchedule(publishAtMs: number | null, dests: ScheduleDest
   return null;
 }
 
+/** Size above which a file gets a long-video caution (VidPush targets short clips). */
+export const LONG_UPLOAD_WARN_BYTES = 500 * 1024 * 1024;
+
+/** Non-blocking caution for unusually large files. Null when no caution applies. */
+export function longUploadWarning(file: File): string | null {
+  if (file.size > LONG_UPLOAD_WARN_BYTES) {
+    return `${file.name}: VidPush is built for short clips — this large file may not finish if the idle server scales down. Upload it anyway only if you can retry.`;
+  }
+  return null;
+}
+
 /** Per-file pre-check before upload. Null means the file may be sent. */
 export function validateQueueFile(
   file: File,

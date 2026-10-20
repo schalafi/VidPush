@@ -28,6 +28,7 @@ import {
   formatLocal,
   formatSize,
   localInputToUtcMs,
+  longUploadWarning,
   utcMsToLocalInput,
   validateQueueFile,
   validateSchedule,
@@ -745,6 +746,10 @@ export default function App() {
             />
           </div>
           <p className="file-hint">Up to 5 GB each; up to 1 GB and MP4/MOV when Facebook or Instagram is selected. Each platform also checks its video requirements.</p>
+          <p className="hint" role="note">
+            VidPush is built for short clips. Files over 500 MB (or long videos) may not finish
+            if the idle server scales down — upload those only if you can retry.
+          </p>
 
           {items.length > 0 && (
             <div className="queue">
@@ -794,6 +799,10 @@ export default function App() {
                       )}
                       {item.note && <p className="hint">{item.note}</p>}
                       {item.error && <div className="banner error" role="alert">{item.error}</div>}
+                      {item.status !== "uploading" && (() => {
+                        const warn = longUploadWarning(item.file);
+                        return warn ? <p className="hint" role="note">{warn}</p> : null;
+                      })()}
                       {states.length > 0 && (
                         <div className="progress-block">
                           {states.map(([name, p]) => (

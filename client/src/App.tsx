@@ -25,15 +25,19 @@ import {
   type UploadJob,
 } from "./api";
 import {
+  dateToLocalInput,
   formatLocal,
+  formatLocalPreview,
   formatSize,
   localInputToUtcMs,
   longUploadWarning,
+  SCHEDULE_PRESETS,
   utcMsToLocalInput,
   validateQueueFile,
   validateSchedule,
   type ScheduleDests,
 } from "./schedule";
+import ThumbnailPicker from "./ThumbnailPicker";
 import "./App.css";
 
 function formatPlatformStatus(p: PlatformState): string {
@@ -53,6 +57,7 @@ type QueueItem = {
   file: File;
   title: string;
   scheduleLocal: string;
+  thumbnail: File | null;
   status: "queued" | "uploading" | "done" | "error";
   progress: number;
   error: string | null;
@@ -349,6 +354,7 @@ export default function App() {
         file: f,
         title: f.name.replace(/\.[^.]+$/, ""),
         scheduleLocal: "",
+        thumbnail: null,
         status: "queued",
         progress: 0,
         error: null,
@@ -406,6 +412,7 @@ export default function App() {
       fd.append("facebook", String(facebookOn));
       fd.append("instagram", String(instagramOn));
       if (item.title.trim()) fd.append("title", item.title.trim());
+      if (item.thumbnail) fd.append("thumbnail", item.thumbnail, item.thumbnail.name);
       if (publishAtMs !== null) fd.append("publishAt", new Date(publishAtMs).toISOString());
       const result = await uploadVideoXHR(fd, pct => patchItem(key, { progress: pct }));
       if (result.jobId) {
@@ -780,7 +787,9 @@ export default function App() {
                         />
                       </div>
                       <div className="field">
-                        <label htmlFor={`sched-${item.key}`}>Publish at (your local time — empty means now)</label>
+                        <label htmlFor={`sched-${item.key}`}>
+                          Publish at — 24-hour time (HH:MM, e.g. 18:30 = 6:30 PM), your local time. Empty means now.
+                        </label>
                         <input
                           id={`sched-${item.key}`}
                           type="datetime-local"
@@ -788,7 +797,54 @@ export default function App() {
                           value={item.scheduleLocal}
                           onChange={(e) => patchItem(item.key, { scheduleLocal: e.target.value })}
                         />
+                        <div className="preset-row" role="group" aria-label="Quick schedule times for tomorrow">
+                          <span className="hint">Tomorrow:</span>
+                          {SCHEDULE_PRESETS.map(preset => (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              className="btn preset"
+                              disabled={locked}
+                              onClick={() => patchItem(item.key, { scheduleLocal: preset.apply() })}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className="btn preset"
+                            disabled={locked}
+                            onClick={() => patchItem(item.key, {
+                              scheduleLocal: dateToLocalInput(new Date(Date.now() + 60 * 60 * 1000)),
+                            })}
+                          >
+                            +1h
+                          </button>
+                          {item.scheduleLocal.trim() && (
+                            <button
+                              type="button"
+                              className="btn ghost preset"
+                              disabled={locked}
+                              onClick={() => patchItem(item.key, { scheduleLocal: "" })}
+                            >
+                              Now
+                            </button>
+                          )}
+                        </div>
+                        <p className="hint" role="status">
+                          {(() => {
+                            const ms = localInputToUtcMs(item.scheduleLocal);
+                            if (!item.scheduleLocal.trim()) return "Publishes immediately.";
+                            if (ms === null) return "That time is not valid yet — keep typing.";
+                            return `Goes out ${formatLocalPreview(ms)}.`;
+                          })()}
+                        </p>
                       </div>
+                      <ThumbnailPicker
+                        file={item.file}
+                        disabled={locked}
+                        onThumbnail={(thumb) => patchItem(item.key, { thumbnail: thumb })}
+                      />
                       {item.status === "uploading" && (
                         <div className="progress" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${item.file.name}`}>
                           <div className="progress-track">
@@ -936,7 +992,7 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
         )}
         {editing && (
           <div className="field">
-            <label htmlFor={`edit-${row.id}`}>New publish time (your local time)</label>
+            <label htmlFor={`edit-${row.id}`}>New publish time — 24-hour time (HH:MM), your local time</label>
             <input
               id={`edit-${row.id}`}
               type="datetime-local"
@@ -944,6 +1000,13 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
               value={value}
               onChange={(e) => setValue(e.target.value)}
             />
+            <p className="hint" role="status">
+              {(() => {
+                const ms = localInputToUtcMs(value);
+                if (ms === null) return "That time is not valid yet — keep typing.";
+                return `New time: ${formatLocalPreview(ms)}.`;
+              })()}
+            </p>
           </div>
         )}
         {err && <div className="banner error" role="alert">{err}</div>}

@@ -46,13 +46,33 @@ export function scheduledDir(): string {
   return dir;
 }
 
-router.post("/", upload.single("video"), (req, res) => {
+export function validateThumbnail(file: { mimetype: string; size: number } | undefined): string | null {
+  if (!file) return null;
+  if (!file.mimetype.startsWith("image/")) return "Thumbnail must be an image file.";
+  if (file.size > 2 * 1024 * 1024) return "Thumbnail must be up to 2 MB (YouTube limit).";
+  return null;
+}
+
+const videoUpload = upload.fields([
+  { name: "video", maxCount: 1 },
+  { name: "thumbnail", maxCount: 1 },
+]);
+
+router.post("/", videoUpload, (req, res) => {
   const userId = defaultUserId();
-  if (!req.file?.path) {
+  const files = req.files as { video?: Express.Multer.File[]; thumbnail?: Express.Multer.File[] } | undefined;
+  const video = files?.video?.[0];
+  const thumbnail = files?.thumbnail?.[0];
+  if (!video?.path) {
+    if (thumbnail?.path) fs.unlink(thumbnail.path, () => {});
     res.status(400).json({ error: "Missing video file (field name: video)" });
     return;
   }
-  const cleanup = () => fs.unlink(req.file!.path, () => {});
+  const reqFile = video;
+  const cleanup = () => {
+    fs.unlink(reqFile.path, () => {});
+    if (thumbnail?.path) fs.unlink(thumbnail.path, () => {});
+  };
 
   const wantYoutube = parseBool(req.body.youtube);
   const wantTiktok = parseBool(req.body.tiktok);
@@ -61,7 +81,7 @@ router.post("/", upload.single("video"), (req, res) => {
   const titleRaw = typeof req.body.title === "string" ? req.body.title.trim() : "";
   const baseTitle =
     titleRaw ||
-    path.basename(req.file.originalname, path.extname(req.file.originalname)) ||
+    path.basename(reqFile.originalname, path.extname(reqFile.originalname)) ||
     "VidPush upload";
   const description =
     typeof req.body.description === "string" ? req.body.description : "";
@@ -116,7 +136,7 @@ router.post("/", upload.single("video"), (req, res) => {
       res.status(400).json({ error: `Connect ${platform} first` }); return;
     }
   }
-  if ((wantFacebook || wantInstagram) && (req.file.size > 1024 * 1024 * 1024 || !/\.(mp4|mov)$/i.test(req.file.originalname))) {
+  if ((wantFacebook || wantInstagram) && (reqFile.size > 1024 * 1024 * 1024 || !/\.(mp4|mov)$/i.test(reqFile.originalname))) {
     cleanup();
     res.status(400).json({ error: "Facebook/Instagram uploads require an MP4 or MOV file up to 1 GB." }); return;
   }
@@ -124,14 +144,19 @@ router.post("/", upload.single("video"), (req, res) => {
     cleanup();
     res.status(400).json({ error: "Instagram captions must be at most 2,200 characters." }); return;
   }
+  const thumbErr = validateThumbnail(thumbnail);
+  if (thumbErr) {
+    cleanup();
+    res.status(400).json({ error: thumbErr }); return;
+  }
 
   const scheduleIds: string[] = [];
   if ((heldTiktok || heldInstagram) && publishAtMs !== undefined) {
     const id = uuidv4();
-    const safe = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const safe = reqFile.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
     const dest = path.join(scheduledDir(), `${id}-${safe}`);
     try {
-      fs.copyFileSync(req.file.path, dest);
+      fs.copyFileSync(reqFile.path, dest);
     } catch {
       cleanup();
       res.status(500).json({ error: "Could not store the video for scheduled publishing" });
@@ -141,8 +166,8 @@ router.post("/", upload.single("video"), (req, res) => {
       id,
       user_id: userId,
       file_path: dest,
-      original_name: req.file.originalname,
-      size: req.file.size,
+      original_name: reqFile.originalname,
+      size: reqFile.size,
       title: baseTitle,
       description,
       destinations: JSON.stringify({ tiktok: heldTiktok, instagram: heldInstagram }),
@@ -163,12 +188,17 @@ router.post("/", upload.single("video"), (req, res) => {
   createJob(jobId, wantYoutube, nowTiktok, wantFacebook, nowInstagram);
   pruneJobs();
 
-  const filePath = req.file.path;
+  const filePath = reqFile.path;
+  // Thumbnails apply to YouTube only; held-only uploads (TikTok/Instagram)
+  // run later from the stored video copy, so an unused thumbnail is dropped
+  // with the temp files by cleanup().
+  const thumbnailPath = wantYoutube ? thumbnail?.path : undefined;
 
   void runUploadJob({
     jobId,
     userId,
     filePath,
+    thumbnailPath,
     wantYoutube,
     wantTiktok: nowTiktok,
     wantFacebook,

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import {
+  dateToLocalInput,
+  formatLocalPreview,
   formatSize,
   localInputToUtcMs,
   longUploadWarning,
+  SCHEDULE_PRESETS,
+  tomorrowAtHour,
   utcMsToLocalInput,
   validateQueueFile,
   validateSchedule,
@@ -98,6 +102,45 @@ describe("longUploadWarning", () => {
     const warn = longUploadWarning(mp4("long.mp4", 600 * 1024 * 1024));
     assert.ok(warn !== null);
     expect(warn).toContain("short clips");
+  });
+});
+
+describe("schedule presets", () => {
+  it("offers tomorrow 12 AM / 6 AM / 12 PM / 6 PM quick picks", () => {
+    expect(SCHEDULE_PRESETS.map(p => p.label)).toEqual(["12 AM", "6 AM", "12 PM", "6 PM"]);
+  });
+
+  it("tomorrowAtHour lands on tomorrow at the requested 24-hour hour", () => {
+    const d = tomorrowAtHour(18);
+    const now = new Date();
+    const expected = new Date(now);
+    expected.setDate(expected.getDate() + 1);
+    expect(d.getFullYear()).toBe(expected.getFullYear());
+    expect(d.getMonth()).toBe(expected.getMonth());
+    expect(d.getDate()).toBe(expected.getDate());
+    expect(d.getHours()).toBe(18);
+    expect(d.getMinutes()).toBe(0);
+  });
+
+  it("preset values round-trip through the datetime-local parser", () => {
+    for (const preset of SCHEDULE_PRESETS) {
+      const value = preset.apply();
+      expect(value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+      assert.ok(localInputToUtcMs(value) !== null);
+    }
+  });
+
+  it("dateToLocalInput matches utcMsToLocalInput", () => {
+    const d = new Date(2026, 9, 25, 18, 30);
+    expect(dateToLocalInput(d)).toBe(utcMsToLocalInput(d.getTime()));
+  });
+
+  it("formatLocalPreview names a time that disambiguates 24h input", () => {
+    const ms = localInputToUtcMs("2026-10-25T18:30");
+    assert.ok(ms !== null);
+    const preview = formatLocalPreview(ms);
+    expect(preview).toContain("6:30");
+    expect(preview).toMatch(/PM/i);
   });
 });
 

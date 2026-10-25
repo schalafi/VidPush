@@ -25,6 +25,45 @@ export function formatLocal(ms: number | string): string {
   return new Date(ms).toLocaleString();
 }
 
+/**
+ * Unambiguous preview shown next to the 24-hour datetime-local input.
+ * Uses the browser locale 12-hour rendering plus the zone name, e.g.
+ * "Sat, Oct 25, 6:30 PM (America/Los_Angeles)".
+ */
+export function formatLocalPreview(ms: number): string {
+  const d = new Date(ms);
+  const when = d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return zone ? `${when} (${zone})` : when;
+}
+
+/** Tomorrow's date at a 24-hour-clock hour in local time. */
+export function tomorrowAtHour(hour24: number, minute = 0): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(hour24, minute, 0, 0);
+  return d;
+}
+
+/** Date -> "YYYY-MM-DDTHH:MM" value for a datetime-local input. */
+export function dateToLocalInput(d: Date): string {
+  return utcMsToLocalInput(d.getTime());
+}
+
+/** Quick-pick schedule presets that fill the datetime-local input. */
+export const SCHEDULE_PRESETS = [
+  { label: "12 AM", apply: () => dateToLocalInput(tomorrowAtHour(0)) },
+  { label: "6 AM", apply: () => dateToLocalInput(tomorrowAtHour(6)) },
+  { label: "12 PM", apply: () => dateToLocalInput(tomorrowAtHour(12)) },
+  { label: "6 PM", apply: () => dateToLocalInput(tomorrowAtHour(18)) },
+] as const;
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

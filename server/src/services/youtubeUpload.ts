@@ -6,7 +6,8 @@ export async function uploadToYoutube(
   filePath: string,
   title: string,
   description: string,
-  publishAtMs?: number
+  publishAtMs?: number,
+  thumbnailPath?: string
 ): Promise<string> {
   const youtube = await getYoutubeAuthorizedClient(userId);
   const stream = fs.createReadStream(filePath);
@@ -38,5 +39,17 @@ export async function uploadToYoutube(
 
   const id = res.data.id;
   if (!id) throw new Error("YouTube upload succeeded but no video id returned");
+  if (thumbnailPath) {
+    // Best effort: the video is already live, so a thumbnail failure must
+    // not fail the upload.
+    try {
+      await youtube.thumbnails.set({
+        videoId: id,
+        media: { body: fs.createReadStream(thumbnailPath) },
+      });
+    } catch (e) {
+      console.warn(`YouTube thumbnail for ${id} was not applied:`, e instanceof Error ? e.message : e);
+    }
+  }
   return id;
 }

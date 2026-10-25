@@ -79,6 +79,7 @@ export async function runUploadJob(args: {
   jobId: string;
   userId: string;
   filePath: string;
+  thumbnailPath?: string;
   wantYoutube: boolean;
   wantTiktok: boolean;
   wantFacebook: boolean;
@@ -87,7 +88,7 @@ export async function runUploadJob(args: {
   description: string;
   publishAtMs?: number;
 }): Promise<void> {
-  const { jobId, userId, filePath, wantYoutube, wantTiktok, wantFacebook, wantInstagram, title, description, publishAtMs } = args;
+  const { jobId, userId, filePath, thumbnailPath, wantYoutube, wantTiktok, wantFacebook, wantInstagram, title, description, publishAtMs } = args;
 
   const tasks: Promise<void>[] = [];
 
@@ -96,7 +97,7 @@ export async function runUploadJob(args: {
       (async () => {
         updatePlatform(jobId, "youtube", { status: "uploading" });
         try {
-          const videoId = await uploadToYoutube(userId, filePath, title, description, publishAtMs);
+          const videoId = await uploadToYoutube(userId, filePath, title, description, publishAtMs, thumbnailPath);
           updatePlatform(jobId, "youtube", { status: "done", videoId });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -138,4 +139,5 @@ export async function runUploadJob(args: {
   await Promise.allSettled(tasks);
 
   fs.unlink(filePath, () => {});
+  if (thumbnailPath) fs.unlink(thumbnailPath, () => {});
 }

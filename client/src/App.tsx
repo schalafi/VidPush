@@ -292,17 +292,28 @@ export default function App() {
         try {
           const j = await getJob(item.jobId!);
           setJobs(prev => ({ ...prev, [j.id]: j }));
-          const states = [j.youtube, j.tiktok, j.facebook, j.instagram];
-          const active = states.filter(p => p.status === "queued" || p.status === "uploading");
+          const states: [string, PlatformState][] = [["YouTube", j.youtube], ["TikTok", j.tiktok], ["Facebook", j.facebook], ["Instagram", j.instagram]];
+          const active = states.filter(([, p]) => p.status === "queued" || p.status === "uploading");
           if (active.length) continue;
-          const failed = states.filter(p => p.status === "error");
+          const failed = states.filter(([, p]) => p.status === "error");
+          const expired = states.find(([, p]) => p.status === "error" && /login expired|reconnect/i.test(p.error ?? ""));
+          if (expired) {
+            const [name] = expired;
+            setBanner({ kind: "err", text: `Your ${name} login expired. Press Connect next to ${name} to sign in again, then retry.` });
+            void refreshAuth();
+          }
+          const tiktokPrivate = !expired && states.find(([name, p]) =>
+            name === "TikTok" && p.status === "error" && /private|SELF_ONLY/i.test(p.error ?? ""));
+          if (tiktokPrivate) {
+            setBanner({ kind: "err", text: "TikTok refused the upload: set your TikTok account to Private (TikTok app → Settings → Privacy), then press Retry." });
+          }
           setItems(prev => prev.map(it => {
             if (it.key !== item.key) return it;
             if (!failed.length) return { ...it, status: "done" as const };
             return {
               ...it,
               status: "error" as const,
-              error: failed.map(p => p.error ?? "Upload failed").join(" "),
+              error: failed.map(([, p]) => p.error ?? "Upload failed").join(" "),
             };
           }));
         } catch {
@@ -443,7 +454,11 @@ export default function App() {
         setAuth(null);
         return;
       }
-      patchItem(key, { status: "error", error: e instanceof Error ? e.message : "Upload failed" });
+      const msg = e instanceof Error ? e.message : "Upload failed";
+      if (/private|SELF_ONLY/i.test(msg)) {
+        setBanner({ kind: "err", text: "TikTok refused the upload: set your TikTok account to Private (TikTok app → Settings → Privacy), then press Retry." });
+      }
+      patchItem(key, { status: "error", error: msg });
     }
   };
 

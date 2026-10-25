@@ -7,7 +7,8 @@ import { fileURLToPath } from "url";
 import { createJob, getJob, pruneJobs, runUploadJob } from "../jobs.js";
 import { createScheduled, dataDir } from "../db.js";
 import { isYoutubeConnected } from "../services/googleTokens.js";
-import { isTiktokConnected } from "../services/tiktokTokens.js";
+import { getValidTikTokAccessToken, isTiktokConnected } from "../services/tiktokTokens.js";
+import { fetchCreatorInfo, pickPrivacyLevel } from "../services/tiktokUpload.js";
 
 import { metaConnection } from "../services/metaTokens.js";
 import { parsePublishAt, validatePublishAt } from "../schedulePolicy.js";
@@ -58,7 +59,7 @@ const videoUpload = upload.fields([
   { name: "thumbnail", maxCount: 1 },
 ]);
 
-router.post("/", videoUpload, (req, res) => {
+router.post("/", videoUpload, async (req, res) => {
   const userId = defaultUserId();
   const files = req.files as { video?: Express.Multer.File[]; thumbnail?: Express.Multer.File[] } | undefined;
   const video = files?.video?.[0];
@@ -128,6 +129,24 @@ router.post("/", videoUpload, (req, res) => {
     cleanup();
     res.status(400).json({ error: "Connect TikTok first" });
     return;
+  }
+
+  if (nowTiktok) {
+    // Fail fast when the account cannot direct-post (not set to Private):
+    // creator_info is the same gate the background job would hit minutes
+    // later, so reject now with the actionable message instead. Scheduled
+    // (held) uploads skip this — the account may be switched before go-time.
+    try {
+      const { accessToken } = await getValidTikTokAccessToken(userId);
+      pickPrivacyLevel((await fetchCreatorInfo(accessToken)).privacy_level_options);
+    } catch (e) {
+      if (e instanceof Error && /SELF_ONLY|Private/i.test(e.message)) {
+        cleanup();
+        res.status(400).json({ error: e.message });
+        return;
+      }
+      // Transient lookup failure: let the job try for real.
+    }
   }
 
   for (const platform of ["facebook", "instagram"] as const) {

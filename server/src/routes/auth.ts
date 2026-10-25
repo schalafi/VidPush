@@ -14,8 +14,8 @@ import { getGoogleAuthUrl, getOAuth2Client } from "../oauth/google.js";
 import { exchangeTikTokCode, getTikTokAuthUrl } from "../oauth/tiktok.js";
 import { beginOAuth, finishOAuth } from "../oauthState.js";
 import { getLoginClient, allowedGoogleIdentity } from "../oauth/login.js";
-import { isYoutubeConnected } from "../services/googleTokens.js";
-import { isTiktokConnected } from "../services/tiktokTokens.js";
+import { verifyYoutubeLogin } from "../services/googleTokens.js";
+import { verifyTiktokLogin } from "../services/tiktokTokens.js";
 
 import { metaConnection } from "../services/metaTokens.js";
 import { metaConfigured } from "../oauth/meta.js";
@@ -51,12 +51,15 @@ router.post("/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/status", (_req, res) => {
+router.get("/status", async (_req, res) => {
   const userId = defaultUserId();
+  // Verified: a stored but revoked/expired login reports disconnected so the
+  // UI asks for a fresh login instead of failing at upload time.
+  const [youtube, tiktok] = await Promise.all([verifyYoutubeLogin(userId), verifyTiktokLogin(userId)]);
   res.json({
     userId,
-    youtube: isYoutubeConnected(userId),
-    tiktok: isTiktokConnected(userId),
+    youtube,
+    tiktok,
     facebook: { ...metaConnection(userId, "facebook"), configured: metaConfigured("facebook") },
     instagram: { ...metaConnection(userId, "instagram"), configured: metaConfigured("instagram") },
     facebookPages: db.prepare("SELECT id, name FROM facebook_pages WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)").all(userId, Date.now()),

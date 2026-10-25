@@ -1,6 +1,7 @@
 import { Router } from "express";
 import fs from "fs";
 import {
+  deleteScheduled,
   getScheduled,
   listScheduled,
   setScheduledState,
@@ -83,8 +84,16 @@ router.delete("/:id", (req, res) => {
     res.status(404).json({ error: "Scheduled video not found" });
     return;
   }
+  if (row.status === "error") {
+    // Failed uploads are terminal and their file is already consumed by the
+    // dispatch, so remove the row outright to clear it from the list.
+    deleteScheduled(row.id);
+    fs.unlink(row.file_path, () => {});
+    res.json({ ok: true });
+    return;
+  }
   if (row.status !== "scheduled") {
-    res.status(409).json({ error: `Only pending items can be cancelled (status: ${row.status})` });
+    res.status(409).json({ error: `Only pending or failed items can be removed (status: ${row.status})` });
     return;
   }
   setScheduledState(row.id, "cancelled");

@@ -170,6 +170,24 @@ test("dispatch fails loudly when the TikTok account is not private", async () =>
   } finally { stub.mock.restore(); }
 });
 
+test("failed items can be removed from the list", async () => {
+  const stub = stubTikTok(["PUBLIC_TO_EVERYONE"]); // SELF_ONLY unavailable
+  try {
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const created = await postUpload({ tiktok: "true", publishAt: future });
+    const id = created.body.scheduleIds![0];
+    updateScheduledTime(id, Date.now() - 1000);
+    await dispatchDue();
+    assert.equal(getScheduled(id)!.status, "error");
+
+    const del = await fetch(`${base}/api/scheduled/${id}`, { method: "DELETE" });
+    assert.equal(del.status, 200);
+    assert.equal(getScheduled(id), undefined);
+    const list = await (await fetch(`${base}/api/scheduled`)).json() as { items: { id: string }[] };
+    assert.ok(!list.items.some(i => i.id === id));
+  } finally { stub.mock.restore(); }
+});
+
 test("cancel removes a pending item and its file", async () => {
   const stub = stubTikTok(["SELF_ONLY"]);
   try {

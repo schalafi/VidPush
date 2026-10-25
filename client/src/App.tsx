@@ -1000,14 +1000,17 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
   };
 
   const onCancel = async () => {
-    if (!window.confirm(`Cancel the scheduled publish of ${row.originalName}?`)) return;
+    const prompt = row.status === "error"
+      ? `Remove the failed upload of ${row.originalName} from the list?`
+      : `Cancel the scheduled publish of ${row.originalName}?`;
+    if (!window.confirm(prompt)) return;
     setBusy(true);
     setErr(null);
     try {
       await cancelScheduled(row.id);
       onChanged();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not cancel the scheduled video");
+      setErr(e instanceof Error ? e.message : "Could not remove the scheduled video");
     } finally {
       setBusy(false);
     }
@@ -1054,9 +1057,13 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
         )}
         {err && <div className="banner error" role="alert">{err}</div>}
       </div>
-      {row.status === "scheduled" && (
+      {(row.status === "scheduled" || row.status === "error") && (
         <div className="row-actions">
-          {editing ? (
+          {row.status === "error" ? (
+            <button type="button" className="btn ghost danger" disabled={busy} onClick={() => void onCancel()}>
+              Remove
+            </button>
+          ) : editing ? (
             <>
               <button type="button" className="btn primary" disabled={busy} onClick={() => void onSave()}>
                 Save

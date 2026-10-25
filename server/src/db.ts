@@ -114,6 +114,10 @@ export function setScheduledJob(id: string, jobId: string): void {
   db.prepare("UPDATE scheduled_posts SET job_id = ? WHERE id = ?").run(jobId, id);
 }
 
+export function deleteScheduled(id: string): void {
+  db.prepare("DELETE FROM scheduled_posts WHERE id = ?").run(id);
+}
+
 export type OauthRow = {
   user_id: string;
   provider: string;

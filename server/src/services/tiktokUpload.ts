@@ -14,7 +14,8 @@ type ByteRange = { start: number; end: number };
 /**
  * TikTok FILE_UPLOAD chunk plan per media transfer guide:
  * - video_size < 5 MB: one chunk, chunk_size = video_size
- * - else: total_chunk_count = floor(video_size / chunk_size), last chunk holds remainder (may exceed chunk_size)
+ * - else: total_chunk_count = ceil(video_size / chunk_size), so no chunk
+ *   exceeds the declared chunk_size (TikTok rejects the init otherwise).
  */
 export function planTiktokChunks(videoSize: number): {
   chunkSize: number;
@@ -34,7 +35,7 @@ export function planTiktokChunks(videoSize: number): {
   }
 
   const chunkSize = Math.min(CHUNK_SIZE, MAX_CHUNK_SIZE);
-  const totalChunkCount = Math.max(1, Math.floor(videoSize / chunkSize));
+  const totalChunkCount = Math.max(1, Math.ceil(videoSize / chunkSize));
   const ranges: ByteRange[] = [];
 
   for (let i = 0; i < totalChunkCount; i++) {

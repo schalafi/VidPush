@@ -40,6 +40,18 @@ if your current shell does not yet find `modal`.
 8. Open the deployed URL, sign in with the authorized Google account, and connect accounts.
    Local OAuth tokens are intentionally not copied into the deployment.
 
+## CI/CD
+
+Pushing to GitHub does NOT deploy. The [CI workflow](../.github/workflows/ci.yml)
+runs `npm test` and `npm run build` on every push and pull request. When tests
+pass on a push to `main`, it deploys with `modal deploy --env vidpush
+modal_app.py` and then checks `/api/health`.
+
+One-time setup: the `vidpush` environment already exists in the GitHub repo; add
+secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` from a Modal token key pair.
+Deploys serialize through the `vidpush-deploy` concurrency group, so finish
+uploads before merging to `main`.
+
 ## Storage and lifecycle
 
 The `vidpush-data` Volume holds the SQLite account database. Modal periodically

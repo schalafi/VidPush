@@ -458,6 +458,12 @@ a.btn { text-decoration: none; display: inline-block; }
   min-width: 0;
 }
 
+.dest-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .preset-row {
   display: flex;
   flex-wrap: wrap;

@@ -1017,7 +1017,12 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
     <div className="scheduled-row">
       <div className="scheduled-meta">
         <strong className="queue-name">{row.title || row.originalName}</strong>
-        <span className="hint">{formatSize(row.size)} · {destNames.join(", ") || "No destinations"}</span>
+        <span className="hint">{formatSize(row.size)}</span>
+        <span className="dest-badges" aria-label={`Posts to ${destNames.join(", ") || "no destinations"}`}>
+          {destNames.length > 0 ? destNames.map(label => (
+            <span className="pill on" key={label}>{label}</span>
+          )) : <span className="hint">No destinations</span>}
+        </span>
         <span className="hint">Publishes {formatLocal(row.publishAt)} (your local time)</span>
         <span className={`pill ${row.status === "scheduled" ? "on" : "off"}`}>{row.status}</span>
         {row.error && <div className="banner error" role="alert">{row.error}</div>}

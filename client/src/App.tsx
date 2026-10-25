@@ -40,6 +40,19 @@ import {
 import ThumbnailPicker from "./ThumbnailPicker";
 import "./App.css";
 
+const DEST_PREF_KEY = "vidpush.dests";
+
+function readDestPref(key: "youtube" | "tiktok" | "facebook" | "instagram", fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(DEST_PREF_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return typeof parsed[key] === "boolean" ? (parsed[key] as boolean) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function formatPlatformStatus(p: PlatformState): string {
   if (p.status === "idle") return "Not selected";
   if (p.status === "queued") return "Queued";
@@ -97,10 +110,20 @@ export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authErr, setAuthErr] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [youtubeOn, setYoutubeOn] = useState(true);
-  const [tiktokOn, setTiktokOn] = useState(true);
-  const [facebookOn, setFacebookOn] = useState(false);
-  const [instagramOn, setInstagramOn] = useState(false);
+  const [youtubeOn, setYoutubeOn] = useState(() => readDestPref("youtube", true));
+  const [tiktokOn, setTiktokOn] = useState(() => readDestPref("tiktok", true));
+  const [facebookOn, setFacebookOn] = useState(() => readDestPref("facebook", false));
+  const [instagramOn, setInstagramOn] = useState(() => readDestPref("instagram", false));
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DEST_PREF_KEY,
+        JSON.stringify({ youtube: youtubeOn, tiktok: tiktokOn, facebook: facebookOn, instagram: instagramOn })
+      );
+    } catch {
+      /* private mode: keep in-memory state */
+    }
+  }, [youtubeOn, tiktokOn, facebookOn, instagramOn]);
   const [banner, setBanner] = useState<{ kind: "ok" | "err" | "info"; text: string } | null>(null);
   const [drag, setDrag] = useState(false);
   const [items, setItems] = useState<QueueItem[]>([]);

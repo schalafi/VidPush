@@ -6,16 +6,21 @@ const CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_in
 const STATUS_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
 
 const CHUNK_SIZE = 10 * 1024 * 1024;
-const MIN_WHOLE_UPLOAD = 5 * 1024 * 1024;
-const MAX_CHUNK_SIZE = 64 * 1024 * 1024;
 
 type ByteRange = { start: number; end: number };
 
 /**
  * TikTok FILE_UPLOAD chunk plan per media transfer guide:
- * - video_size < 5 MB: one chunk, chunk_size = video_size
- * - else: total_chunk_count = ceil(video_size / chunk_size), so no chunk
- *   exceeds the declared chunk_size (TikTok rejects the init otherwise).
+ * - total_chunk_count = floor(video_size / chunk_size), minimum 1.
+ * - Each chunk must be at least 5 MB and no more than 64 MB, except the
+ *   final chunk, which absorbs the trailing bytes and may exceed chunk_size
+ *   (up to 128 MB). So a 14.89 MB file with 10 MB chunks is ONE chunk, and
+ *   a 50,000,123-byte file with 10,000,000-byte chunks is 5 chunks with the
+ *   last carrying 10,000,123 bytes.
+ * - Files at or below one chunk go whole (chunk_size = video_size), which
+ *   also satisfies the < 5 MB whole-upload rule. Splitting with ceil would
+ *   send an invalid total_chunk_count and a small (< 5 MB) tail chunk that
+ *   TikTok rejects at init.
  */
 export function planTiktokChunks(videoSize: number): {
   chunkSize: number;
@@ -26,7 +31,7 @@ export function planTiktokChunks(videoSize: number): {
     throw new Error("Video file is empty");
   }
 
-  if (videoSize < MIN_WHOLE_UPLOAD) {
+  if (videoSize <= CHUNK_SIZE) {
     return {
       chunkSize: videoSize,
       totalChunkCount: 1,
@@ -34,8 +39,8 @@ export function planTiktokChunks(videoSize: number): {
     };
   }
 
-  const chunkSize = Math.min(CHUNK_SIZE, MAX_CHUNK_SIZE);
-  const totalChunkCount = Math.max(1, Math.ceil(videoSize / chunkSize));
+  const chunkSize = CHUNK_SIZE;
+  const totalChunkCount = Math.max(1, Math.floor(videoSize / chunkSize));
   const ranges: ByteRange[] = [];
 
   for (let i = 0; i < totalChunkCount; i++) {

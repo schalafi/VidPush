@@ -70,11 +70,11 @@ publishing:
     redirect_uri_env: FACEBOOK_REDIRECT_URI
     redirect_uri: https://schalafi-vidpush--vidpush-web.modal.run/api/auth/facebook/callback
   instagram:
-    status: awaiting_account_setup
+    status: app_configured_awaiting_secret_and_connect
     account_type: professional
-    username: null
-    account_id: null
-    app_id: null
+    username: doublef.corp
+    account_id: "17841459945086601"
+    app_id: "28412341631798982"
     app_id_env: INSTAGRAM_APP_ID
     app_secret_env: INSTAGRAM_APP_SECRET
     redirect_uri_env: INSTAGRAM_REDIRECT_URI

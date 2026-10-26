@@ -98,7 +98,7 @@ export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "e
 
 export function listScheduled(userId: string): ScheduledRow[] {
   return db
-    .prepare("SELECT * FROM scheduled_posts WHERE user_id = ? ORDER BY publish_at ASC")
+    .prepare("SELECT * FROM scheduled_posts WHERE user_id = ? ORDER BY created_at DESC")
     .all(userId) as ScheduledRow[];
 }
 

@@ -258,6 +258,22 @@ test("finished rows older than 15 days are pruned, errors and pending are kept",
   db.prepare("DELETE FROM scheduled_posts WHERE id IN ('prune-old-error', 'prune-old-pending')").run();
 });
 
+test("scheduled list shows most recently scheduled first", async () => {
+  const { createScheduled } = await import("../src/db.js");
+  const now = Date.now();
+  const mk = (id: string, createdAt: number) =>
+    createScheduled({
+      id, user_id: "default", file_path: `${dir}/ghost-${id}.mp4`, original_name: `${id}.mp4`,
+      size: 10, title: id, description: "", destinations: JSON.stringify({ tiktok: true }),
+      publish_at: now + 3600_000, created_at: createdAt,
+    });
+  mk("order-older", now - 2000);
+  mk("order-newer", now - 1000);
+  const ids = listScheduled("default").map(r => r.id);
+  assert.ok(ids.indexOf("order-newer") < ids.indexOf("order-older"));
+  db.prepare("DELETE FROM scheduled_posts WHERE id IN ('order-older', 'order-newer')").run();
+});
+
 test("Facebook finish uses SCHEDULED only when a publish time is given", async () => {
   upsertTokens("default", "facebook", "fb-secret", null, Date.now() + 86400_000, "fb-page-1", "My Page");
   const seen: Record<string, string>[] = [];

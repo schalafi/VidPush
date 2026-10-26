@@ -32,9 +32,15 @@ test("Facebook and Instagram publish independently using different accounts and 
     assert.equal(headers.get("authorization"), `Bearer ${ig ? "ig-secret" : "fb-secret"}`);
     const body = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams();
     if (url.pathname.endsWith("/ig-account-2/media")) {
-      assert.equal(body.get("upload_type"), "resumable");
+      // Instagram Login apps cannot use resumable sessions (Facebook Login
+      // for Business only), so Reels go through the video_url flow: Meta
+      // fetches the bytes from a temporary public link.
+      assert.equal(body.get("upload_type"), null);
       assert.equal(body.get("media_type"), "REELS");
-      return json({ id: "ig-container", uri: "https://rupload.facebook.com/ig-container" });
+      const videoUrl = body.get("video_url") ?? "";
+      assert.match(videoUrl, /^https:\/\/.+\/api\/upload\/public\/[0-9a-f-]{36}$/);
+      assert.equal(body.get("caption"), "caption");
+      return json({ id: "ig-container" });
     }
     if (url.pathname.endsWith("/ig-container")) return json({ status_code: "FINISHED" });
     if (url.pathname.endsWith("/media_publish")) {
@@ -49,13 +55,18 @@ test("Facebook and Instagram publish independently using different accounts and 
     if (url.pathname.endsWith("/fb-video")) return json({ status: { video_status: "ready", publishing_phase: { status: "complete" } } });
     throw new Error("Unexpected API request");
   });
+  const savedFront = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = "https://example.modal.run";
   try {
     assert.equal(await uploadToMeta("facebook", "default", file, "caption"), "fb-video");
     assert.equal(await uploadToMeta("instagram", "default", file, "caption"), "ig-post");
     deleteTokens("default", "facebook");
     assert.equal(metaConnection("default", "facebook").connected, false);
     assert.equal(getTokens("default", "instagram")?.open_id, "ig-account-2");
-  } finally { stub.mock.restore(); }
+  } finally {
+    stub.mock.restore();
+    if (savedFront === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = savedFront;
+  }
 });
 test("Facebook processing ready is not publication complete", async () => {
   let requests = 0;
@@ -75,6 +86,45 @@ test("upload URL cannot forward a token to another host", async () => {
   await assert.rejects(uploadMetaBinary("https://attacker.example/video", "secret", file), /unexpected upload destination/);
   await assert.rejects(uploadMetaBinary("https://rupload.facebook.com.attacker.example/video", "secret", file), /unexpected upload destination/);
 });
+test("temporary public links serve the exact file, then die", async () => {
+  const express = (await import("express")).default;
+  const { publicFileRouter, issuePublicFileUrl, revokePublicFileUrl, publicBaseUrl } =
+    await import("../src/publicFiles.js");
+  const app = express();
+  app.use("/api/upload/public", publicFileRouter);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.on("listening", resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    const url = issuePublicFileUrl(base, file);
+    const token = url.split("/").pop()!;
+    assert.match(token, /^[0-9a-f-]{36}$/);
+    const res = await fetch(`${base}/api/upload/public/${token}`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /video\/mp4/);
+    assert.equal(await res.text(), "test video");
+    // Unknown and revoked links are gone.
+    assert.equal((await fetch(`${base}/api/upload/public/00000000-0000-4000-8000-000000000000`)).status, 404);
+    revokePublicFileUrl(url);
+    assert.equal((await fetch(`${base}/api/upload/public/${token}`)).status, 404);
+  } finally { server.close(); }
+
+  const savedFront = process.env.FRONTEND_URL;
+  const savedNgrok = process.env.NGROK_DOMAIN;
+  try {
+    process.env.FRONTEND_URL = "https://example.modal.run";
+    assert.equal(publicBaseUrl(), "https://example.modal.run");
+    process.env.FRONTEND_URL = "http://localhost:5173";
+    process.env.NGROK_DOMAIN = "abc.ngrok-free.dev";
+    assert.equal(publicBaseUrl(), "https://abc.ngrok-free.dev");
+    delete process.env.NGROK_DOMAIN;
+    assert.throws(() => publicBaseUrl(), /public file URL/);
+  } finally {
+    if (savedFront === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = savedFront;
+    if (savedNgrok === undefined) delete process.env.NGROK_DOMAIN; else process.env.NGROK_DOMAIN = savedNgrok;
+  }
+});
+
 test("four-platform jobs preserve independent outcomes", () => {
   createJob("job", true, false, true, true);
   updatePlatform("job", "facebook", { status: "error", error: "failed" });

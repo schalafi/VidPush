@@ -59,9 +59,17 @@ required for the selected permissions. Follow the current dashboard requirements
   2,200 characters. VidPush accepts MP4/MOV up to 1 GB for Meta destinations;
   providers also enforce duration, codecs, aspect ratio, and other requirements.
   No automatic transcoding is performed.
-- The server streams the file directly to Meta's upload endpoint. It does not
-  expose uploaded files through a public URL. Instagram waits for container
-  processing before publishing; Facebook waits for publication confirmation.
+- Facebook streams the file directly to Meta's resumable upload endpoint.
+  Instagram Login apps cannot open resumable sessions (Meta reserves those
+  for Facebook Login for Business), so Instagram publishes via `video_url`:
+  the server exposes the video at a temporary, unguessable
+  `/api/upload/public/<token>` link (valid 30 minutes, revoked right after
+  the publish attempt) for Meta's servers to fetch. That link needs no login
+  because Meta has no session; the token is the credential. Local development
+  therefore needs a public origin (`NGROK_DOMAIN`, which forwards to the API
+  server) — plain localhost cannot work.
+- Instagram waits for container processing before publishing; Facebook waits
+  for publication confirmation.
 - Errors do not stop other selected platforms. Before retrying a failed or
   timed-out operation, check the account and deselect already successful
   destinations to avoid duplicates. Publishing is never automatically retried.

@@ -9,6 +9,7 @@ import metaAuthRoutes from "./routes/metaAuth.js";
 import authRoutes from "./routes/auth.js";
 import uploadRoutes from "./routes/upload.js";
 import scheduledRoutes from "./routes/scheduled.js";
+import { publicFileRouter } from "./publicFiles.js";
 import { startScheduler } from "./scheduler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,9 @@ const clientDir = path.join(__dirname, "..", "..", "client", "dist");
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(clientDir));
 }
+// Temporary Instagram video_url links carry unguessable tokens instead of a
+// session (Meta's servers fetch them), so this stays outside requireAuth.
+app.use("/api/upload/public", publicFileRouter);
 app.use((req, res, next) => {
   if (req.path === "/api" || req.path.startsWith("/api/")) {
     requireAuth(req, res, next);

@@ -1,5 +1,6 @@
 import { graph, uploadMetaBinary, type MetaPlatform } from "./metaApi.js";
 import { metaCredentials } from "./metaTokens.js";
+import { issuePublicFileUrl, publicBaseUrl, revokePublicFileUrl } from "../publicFiles.js";
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // No automatic retry of publishing: a timed-out response can already have published.
 export async function waitForInstagram(token: string, container: string, wait = pause): Promise<void> {
@@ -26,14 +27,22 @@ export async function waitForFacebook(token: string, video: string, wait = pause
 export async function uploadToMeta(platform: MetaPlatform, userId: string, filePath: string, caption: string, publishAtMs?: number): Promise<string> {
   const { token, id } = await metaCredentials(userId, platform);
   if (platform === "instagram") {
-    const container = await graph<{ id: string; uri: string }>(platform, `${id}/media`, token,
-      { media_type: "REELS", upload_type: "resumable", caption, share_to_feed: "true" }, "POST");
-    if (!container.id || !container.uri) throw new Error("Instagram did not return an upload container");
-    await uploadMetaBinary(container.uri, token, filePath);
-    await waitForInstagram(token, container.id);
-    const published = await graph<{ id: string }>(platform, `${id}/media_publish`, token, { creation_id: container.id }, "POST");
-    if (!published.id) throw new Error(`Instagram did not confirm publication of ${container.id}. Check the account before retrying.`);
-    return published.id;
+    // Instagram Login apps cannot open resumable sessions (reserved for
+    // Facebook Login for Business), so Reels publish via `video_url`: Meta
+    // fetches the bytes from a short-lived, unguessable link served by us.
+    // The link is revoked as soon as the publish attempt settles.
+    const videoUrl = issuePublicFileUrl(publicBaseUrl(), filePath);
+    try {
+      const container = await graph<{ id: string }>(platform, `${id}/media`, token,
+        { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: "true" }, "POST");
+      if (!container.id) throw new Error("Instagram did not return a media container");
+      await waitForInstagram(token, container.id);
+      const published = await graph<{ id: string }>(platform, `${id}/media_publish`, token, { creation_id: container.id }, "POST");
+      if (!published.id) throw new Error(`Instagram did not confirm publication of ${container.id}. Check the account before retrying.`);
+      return published.id;
+    } finally {
+      revokePublicFileUrl(videoUrl);
+    }
   }
   const video = await graph<{ video_id: string; upload_url: string }>(platform, `${id}/video_reels`, token, { upload_phase: "start" }, "POST");
   if (!video.video_id || !video.upload_url) throw new Error("Facebook did not return an upload destination");

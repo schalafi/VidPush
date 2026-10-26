@@ -62,6 +62,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS scheduled_posts (
   error TEXT,
   created_at INTEGER NOT NULL
 )`);
+// Additive migration: timestamp terminal transitions for retention pruning.
+const schedCols = db.prepare("PRAGMA table_info(scheduled_posts)").all() as { name: string }[];
+if (!schedCols.some(c => c.name === "completed_at")) db.exec("ALTER TABLE scheduled_posts ADD COLUMN completed_at INTEGER");
 
 export type OauthProvider = "youtube" | "tiktok" | "facebook" | "instagram";
 
@@ -81,10 +84,11 @@ export type ScheduledRow = {
   job_id: string | null;
   error: string | null;
   created_at: number;
+  completed_at: number | null;
 };
 
-export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "error">): ScheduledRow {
-  const full: ScheduledRow = { ...row, status: "scheduled", job_id: null, error: null };
+export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "error" | "completed_at">): ScheduledRow {
+  const full: ScheduledRow = { ...row, status: "scheduled", job_id: null, error: null, completed_at: null };
   db.prepare(
     `INSERT INTO scheduled_posts (id, user_id, file_path, original_name, size, title, description, destinations, publish_at, status, job_id, error, created_at)
      VALUES (@id, @user_id, @file_path, @original_name, @size, @title, @description, @destinations, @publish_at, @status, @job_id, @error, @created_at)`
@@ -106,8 +110,33 @@ export function updateScheduledTime(id: string, publishAt: number): void {
   db.prepare("UPDATE scheduled_posts SET publish_at = ? WHERE id = ?").run(publishAt, id);
 }
 
+const TERMINAL_STATES: ReadonlySet<ScheduledStatus> = new Set(["done", "error", "cancelled"]);
+
 export function setScheduledState(id: string, status: ScheduledStatus, error: string | null = null): void {
-  db.prepare("UPDATE scheduled_posts SET status = ?, error = ? WHERE id = ?").run(status, error, id);
+  if (TERMINAL_STATES.has(status)) {
+    db.prepare("UPDATE scheduled_posts SET status = ?, error = ?, completed_at = ? WHERE id = ?")
+      .run(status, error, Date.now(), id);
+  } else {
+    db.prepare("UPDATE scheduled_posts SET status = ?, error = ? WHERE id = ?").run(status, error, id);
+  }
+}
+
+/**
+ * Remove finished rows (done/cancelled) older than cutoffMs. Rows pre-dating
+ * the completed_at column fall back to publish_at/created_at. Failed rows are
+ * never pruned: they need a human decision. Returns the removed ids.
+ */
+export function pruneTerminalScheduled(cutoffMs: number): string[] {
+  const rows = db.prepare(
+    `SELECT id, file_path FROM scheduled_posts
+     WHERE status IN ('done', 'cancelled')
+       AND COALESCE(completed_at, publish_at, created_at) < ?`
+  ).all(cutoffMs) as { id: string; file_path: string }[];
+  for (const row of rows) {
+    db.prepare("DELETE FROM scheduled_posts WHERE id = ?").run(row.id);
+    fs.unlink(row.file_path, () => {});
+  }
+  return rows.map(r => r.id);
 }
 
 export function setScheduledJob(id: string, jobId: string): void {

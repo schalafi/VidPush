@@ -47,10 +47,12 @@ test("chunk plan follows floor(video_size / chunk_size) with merged tail", () =>
   checkCover(50_000_123);
 });
 
-test("a 14.89 MB file uploads in one merged chunk, not two", () => {
+test("a 14.89 MB file uploads whole: single chunk declares the full size", () => {
   const size = Math.round(14.89 * MB);
   const { chunkSize, totalChunkCount, ranges } = planTiktokChunks(size);
-  assert.equal(chunkSize, 10 * MB);
+  // TikTok rejects init when a lone chunk declares less than the bytes sent,
+  // so the declaration must equal the file size (same as the < 5 MB rule).
+  assert.equal(chunkSize, size);
   assert.equal(totalChunkCount, 1);
   assert.deepEqual(ranges, [{ start: 0, end: size - 1 }]);
 });

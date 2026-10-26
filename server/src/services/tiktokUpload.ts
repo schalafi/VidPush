@@ -17,10 +17,13 @@ type ByteRange = { start: number; end: number };
  *   (up to 128 MB). So a 14.89 MB file with 10 MB chunks is ONE chunk, and
  *   a 50,000,123-byte file with 10,000,000-byte chunks is 5 chunks with the
  *   last carrying 10,000,123 bytes.
- * - Files at or below one chunk go whole (chunk_size = video_size), which
- *   also satisfies the < 5 MB whole-upload rule. Splitting with ceil would
- *   send an invalid total_chunk_count and a small (< 5 MB) tail chunk that
- *   TikTok rejects at init.
+ * - A lone chunk must declare chunk_size equal to the whole file (the same
+ *   rule as the documented < 5 MB whole upload): TikTok rejects init with
+ *   "The chunk size is invalid" when one chunk declares 10 MB but carries
+ *   e.g. 14.89 MB. Multi-chunk plans keep chunk_size at 10 MB with the
+ *   trailing bytes merged into the final chunk.
+ * - Splitting with ceil would send an invalid total_chunk_count and a small
+ *   (< 5 MB) tail chunk that TikTok rejects at init.
  */
 export function planTiktokChunks(videoSize: number): {
   chunkSize: number;
@@ -31,16 +34,10 @@ export function planTiktokChunks(videoSize: number): {
     throw new Error("Video file is empty");
   }
 
-  if (videoSize <= CHUNK_SIZE) {
-    return {
-      chunkSize: videoSize,
-      totalChunkCount: 1,
-      ranges: [{ start: 0, end: videoSize - 1 }],
-    };
-  }
-
-  const chunkSize = CHUNK_SIZE;
-  const totalChunkCount = Math.max(1, Math.floor(videoSize / chunkSize));
+  const totalChunkCount = Math.max(1, Math.floor(videoSize / CHUNK_SIZE));
+  // Single-chunk uploads declare the full file size; multi-chunk uploads
+  // declare the fixed chunk size and merge the tail into the final chunk.
+  const chunkSize = totalChunkCount === 1 ? videoSize : CHUNK_SIZE;
   const ranges: ByteRange[] = [];
 
   for (let i = 0; i < totalChunkCount; i++) {

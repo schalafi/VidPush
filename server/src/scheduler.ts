@@ -1,6 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
-import { db, setScheduledJob, setScheduledState, type ScheduledRow } from "./db.js";
+import { db, pruneTerminalScheduled, setScheduledJob, setScheduledState, type ScheduledRow } from "./db.js";
 import { createJob, getJob, pruneJobs, runUploadJob } from "./jobs.js";
+
+/** Finished rows are kept as proof for this long, then pruned automatically. */
+export const TERMINAL_RETENTION_MS = 15 * 24 * 3600 * 1000;
+
+export function pruneOldTerminal(now: number = Date.now()): string[] {
+  return pruneTerminalScheduled(now - TERMINAL_RETENTION_MS);
+}
 
 /**
  * Hold-and-post for TikTok and Instagram, which have no native scheduling.
@@ -8,6 +15,7 @@ import { createJob, getJob, pruneJobs, runUploadJob } from "./jobs.js";
  * Single-writer safe: production runs one container (see modal_app.py).
  */
 export async function dispatchDue(now: number = Date.now()): Promise<string[]> {
+  pruneOldTerminal(now);
   const due = db
     .prepare("SELECT * FROM scheduled_posts WHERE status = 'scheduled' AND publish_at <= ? ORDER BY publish_at ASC LIMIT 5")
     .all(now) as ScheduledRow[];

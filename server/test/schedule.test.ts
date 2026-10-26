@@ -146,13 +146,14 @@ test("TikTok hold-and-post: schedule, list, edit, dispatch, cancel rules", async
     assert.ok(finished.job_id);
     assert.ok(!existsSync(finished.file_path), "held file consumed by dispatch");
 
-    // Terminal rows can no longer be edited or cancelled.
-    assert.equal((await fetch(`${base}/api/scheduled/${id}`, { method: "DELETE" })).status, 409);
+    // Finished rows can no longer be edited, but can be removed from the list.
     const editDone = await fetch(`${base}/api/scheduled/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ publishAt: later }),
     });
     assert.equal(editDone.status, 409);
+    assert.equal((await fetch(`${base}/api/scheduled/${id}`, { method: "DELETE" })).status, 200);
+    assert.equal(getScheduled(id), undefined);
   } finally { stub.mock.restore(); }
 });
 
@@ -211,6 +212,50 @@ test("cancel removes a pending item and its file", async () => {
   assert.equal(getScheduled(id)!.status, "cancelled");
   assert.ok(!existsSync(path), "cancelled file deleted");
   assert.ok(!listScheduled("default").some(r => r.id === id && r.status === "scheduled"));
+});
+
+test("finished rows older than 15 days are pruned, errors and pending are kept", async () => {
+  const { createScheduled, setScheduledState } = await import("../src/db.js");
+  const old = Date.now() - 20 * 24 * 3600_000;
+  const mk = (id: string, publishAt: number, createdAt: number) =>
+    createScheduled({
+      id, user_id: "default", file_path: `${dir}/ghost-${id}.mp4`, original_name: `${id}.mp4`,
+      size: 10, title: id, description: "", destinations: JSON.stringify({ tiktok: true }),
+      publish_at: publishAt, created_at: createdAt,
+    });
+
+  mk("prune-old-done", old, old);
+  setScheduledState("prune-old-done", "done");
+  db.prepare("UPDATE scheduled_posts SET completed_at = ? WHERE id = ?").run(old, "prune-old-done");
+
+  mk("prune-old-cancelled", old, old);
+  setScheduledState("prune-old-cancelled", "cancelled");
+  db.prepare("UPDATE scheduled_posts SET completed_at = ? WHERE id = ?").run(old, "prune-old-cancelled");
+
+  mk("prune-old-error", old, old);
+  setScheduledState("prune-old-error", "error", "boom");
+  db.prepare("UPDATE scheduled_posts SET completed_at = ? WHERE id = ?").run(old, "prune-old-error");
+
+  mk("prune-fresh-done", Date.now() - 1000, Date.now() - 1000);
+  setScheduledState("prune-fresh-done", "done");
+
+  // Old but still pending (future publish time): never pruned.
+  mk("prune-old-pending", Date.now() + 3600_000, old);
+
+  await dispatchDue(); // no due rows, but the retention sweep runs
+  assert.equal(getScheduled("prune-old-done"), undefined);
+  assert.equal(getScheduled("prune-old-cancelled"), undefined);
+  assert.equal(getScheduled("prune-old-error")!.status, "error");
+  assert.equal(getScheduled("prune-fresh-done")!.status, "done");
+  assert.equal(getScheduled("prune-old-pending")!.status, "scheduled");
+
+  // Manual removal still works for finished and cancelled rows.
+  assert.equal((await fetch(`${base}/api/scheduled/prune-fresh-done`, { method: "DELETE" })).status, 200);
+  assert.equal(getScheduled("prune-fresh-done"), undefined);
+  // Uploading rows are protected while in flight.
+  db.prepare("UPDATE scheduled_posts SET status = 'uploading' WHERE id = ?").run("prune-old-pending");
+  assert.equal((await fetch(`${base}/api/scheduled/prune-old-pending`, { method: "DELETE" })).status, 409);
+  db.prepare("DELETE FROM scheduled_posts WHERE id IN ('prune-old-error', 'prune-old-pending')").run();
 });
 
 test("Facebook finish uses SCHEDULED only when a publish time is given", async () => {

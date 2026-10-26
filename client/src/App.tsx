@@ -17,7 +17,7 @@ import {
   listScheduled,
   logout,
   unlock,
-  updateScheduledTime,
+  updateScheduled,
   uploadVideoXHR,
   type AuthStatus,
   type PlatformState,
@@ -976,6 +976,7 @@ const DEST_LABELS: [keyof ScheduledItem["destinations"], string][] = [
 function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(utcMsToLocalInput(new Date(row.publishAt).getTime()));
+  const [title, setTitle] = useState(row.title);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const destNames = DEST_LABELS.filter(([k]) => row.destinations[k]).map(([, label]) => label);
@@ -986,14 +987,18 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
       setErr("Schedule time is not a valid date and time.");
       return;
     }
+    if (!title.trim()) {
+      setErr("Title cannot be empty.");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
-      await updateScheduledTime(row.id, new Date(ms).toISOString());
+      await updateScheduled(row.id, { publishAt: new Date(ms).toISOString(), title: title.trim() });
       setEditing(false);
       onChanged();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not change the scheduled time");
+      setErr(e instanceof Error ? e.message : "Could not update the scheduled video");
     } finally {
       setBusy(false);
     }
@@ -1037,23 +1042,37 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
           </p>
         )}
         {editing && (
-          <div className="field">
-            <label htmlFor={`edit-${row.id}`}>New publish time — 24-hour time (HH:MM), your local time</label>
-            <input
-              id={`edit-${row.id}`}
-              type="datetime-local"
-              disabled={busy}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-            />
-            <p className="hint" role="status">
-              {(() => {
-                const ms = localInputToUtcMs(value);
-                if (ms === null) return "That time is not valid yet — keep typing.";
-                return `New time: ${formatLocalPreview(ms)}.`;
-              })()}
-            </p>
-          </div>
+          <>
+            <div className="field">
+              <label htmlFor={`edit-title-${row.id}`}>Title / caption</label>
+              <input
+                id={`edit-title-${row.id}`}
+                type="text"
+                disabled={busy}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Video title"
+                autoComplete="off"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={`edit-${row.id}`}>New publish time — 24-hour time (HH:MM), your local time</label>
+              <input
+                id={`edit-${row.id}`}
+                type="datetime-local"
+                disabled={busy}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+              />
+              <p className="hint" role="status">
+                {(() => {
+                  const ms = localInputToUtcMs(value);
+                  if (ms === null) return "That time is not valid yet — keep typing.";
+                  return `New time: ${formatLocalPreview(ms)}.`;
+                })()}
+              </p>
+            </div>
+          </>
         )}
         {err && <div className="banner error" role="alert">{err}</div>}
       </div>
@@ -1075,7 +1094,7 @@ function ScheduledRow({ row, onChanged }: { row: ScheduledItem; onChanged: () =>
           ) : (
             <>
               <button type="button" className="btn" disabled={busy} onClick={() => { setEditing(true); setErr(null); }}>
-                Edit time
+                Edit
               </button>
               <button type="button" className="btn ghost danger" disabled={busy} onClick={() => void onCancel()}>
                 Cancel

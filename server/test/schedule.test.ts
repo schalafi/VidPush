@@ -137,6 +137,24 @@ test("TikTok hold-and-post: schedule, list, edit, dispatch, cancel rules", async
     assert.equal(goodPatch.status, 200);
     assert.equal(getScheduled(id)!.publish_at, new Date(later).getTime());
 
+    // Title can be corrected before dispatch; empty titles are rejected.
+    const rename = await fetch(`${base}/api/scheduled/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "  Morning clip  " }),
+    });
+    assert.equal(rename.status, 200);
+    assert.equal(getScheduled(id)!.title, "Morning clip");
+    const emptyRename = await fetch(`${base}/api/scheduled/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "   " }),
+    });
+    assert.equal(emptyRename.status, 400);
+    const nothingPatch = await fetch(`${base}/api/scheduled/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(nothingPatch.status, 400);
+
     // Make it due and dispatch: publishes via the normal TikTok flow.
     updateScheduledTime(id, Date.now() - 1000);
     const done = await dispatchDue();
@@ -212,6 +230,26 @@ test("cancel removes a pending item and its file", async () => {
   assert.equal(getScheduled(id)!.status, "cancelled");
   assert.ok(!existsSync(path), "cancelled file deleted");
   assert.ok(!listScheduled("default").some(r => r.id === id && r.status === "scheduled"));
+});
+
+test("scheduled titles respect the Instagram caption cap", async () => {
+  // Instagram tokens were connected by the earlier cancel test in this file.
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const created = await postUpload({ instagram: "true", title: "Short", publishAt: future }, "reel2.mp4");
+  assert.equal(created.status, 200);
+  const id = created.body.scheduleIds![0];
+  const tooLong = await fetch(`${base}/api/scheduled/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "x".repeat(2201) }),
+  });
+  assert.equal(tooLong.status, 400);
+  const fixed = await fetch(`${base}/api/scheduled/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "Fixed caption" }),
+  });
+  assert.equal(fixed.status, 200);
+  assert.equal(getScheduled(id)!.title, "Fixed caption");
+  assert.equal((await fetch(`${base}/api/scheduled/${id}`, { method: "DELETE" })).status, 200);
 });
 
 test("finished rows older than 15 days are pruned, errors and pending are kept", async () => {

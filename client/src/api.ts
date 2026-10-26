@@ -162,14 +162,14 @@ export async function listScheduled(): Promise<ScheduledItem[]> {
   return json.items;
 }
 
-export async function updateScheduledTime(id: string, publishAt: string): Promise<ScheduledItem> {
+export async function updateScheduled(id: string, patch: { publishAt?: string; title?: string }): Promise<ScheduledItem> {
   const res = await api(`/api/scheduled/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ publishAt }),
+    body: JSON.stringify(patch),
   });
   const json = (await res.json()) as ScheduledItem & { error?: string };
-  if (!res.ok) throw new Error(json.error ?? "Could not change the scheduled time");
+  if (!res.ok) throw new Error(json.error ?? "Could not update the scheduled video");
   return json;
 }
 

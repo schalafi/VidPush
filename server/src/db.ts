@@ -110,6 +110,10 @@ export function updateScheduledTime(id: string, publishAt: number): void {
   db.prepare("UPDATE scheduled_posts SET publish_at = ? WHERE id = ?").run(publishAt, id);
 }
 
+export function updateScheduledTitle(id: string, title: string): void {
+  db.prepare("UPDATE scheduled_posts SET title = ? WHERE id = ?").run(title, id);
+}
+
 const TERMINAL_STATES: ReadonlySet<ScheduledStatus> = new Set(["done", "error", "cancelled"]);
 
 export function setScheduledState(id: string, status: ScheduledStatus, error: string | null = null): void {

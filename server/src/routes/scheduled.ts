@@ -6,6 +6,7 @@ import {
   listScheduled,
   setScheduledState,
   updateScheduledTime,
+  updateScheduledTitle,
   type ScheduledRow,
 } from "../db.js";
 import { parsePublishAt, validatePublishAt } from "../schedulePolicy.js";
@@ -58,23 +59,41 @@ router.patch("/:id", (req, res) => {
   }
   let publishAtMs: number | undefined;
   try {
-    publishAtMs = parsePublishAt(req.body.publishAt);
+    publishAtMs = parsePublishAt(req.body?.publishAt);
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "Invalid schedule time" });
     return;
   }
-  if (publishAtMs === undefined) {
-    res.status(400).json({ error: "Schedule time is required" });
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : undefined;
+  if (publishAtMs === undefined && title === undefined) {
+    res.status(400).json({ error: "Nothing to update: provide a schedule time, a title, or both" });
     return;
   }
-  const dests = JSON.parse(row.destinations) as { facebook?: boolean };
-  const err = validatePublishAt(publishAtMs, { facebook: !!dests.facebook, held: true });
-  if (err) {
-    res.status(400).json({ error: err });
-    return;
+  const dests = JSON.parse(row.destinations) as { facebook?: boolean; instagram?: boolean };
+  if (title !== undefined) {
+    if (!title) {
+      res.status(400).json({ error: "Title cannot be empty." });
+      return;
+    }
+    if (dests.instagram && title.length > 2200) {
+      res.status(400).json({ error: "Instagram captions must be at most 2,200 characters." });
+      return;
+    }
   }
-  updateScheduledTime(row.id, publishAtMs);
-  res.json(shape({ ...row, publish_at: publishAtMs }));
+  if (publishAtMs !== undefined) {
+    const err = validatePublishAt(publishAtMs, { facebook: !!dests.facebook, held: true });
+    if (err) {
+      res.status(400).json({ error: err });
+      return;
+    }
+    updateScheduledTime(row.id, publishAtMs);
+  }
+  if (title !== undefined) updateScheduledTitle(row.id, title);
+  res.json(shape({
+    ...row,
+    publish_at: publishAtMs ?? row.publish_at,
+    title: title ?? row.title,
+  }));
 });
 
 router.delete("/:id", (req, res) => {

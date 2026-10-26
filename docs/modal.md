@@ -13,11 +13,18 @@ if your current shell does not yet find `modal`.
 2. Choose the deployment environment. Run `modal profile current` and
    `modal environment list` to confirm the account and environment.
 3. Create a Modal Secret named `vidpush-config` in that environment using the
-   Modal dashboard. Copy the following values from your local `.env`:
+   Modal dashboard. It must contain every production key (enforced by
+   `required_keys` in `modal_app.py`; see [.env.example](../.env.example)
+   for the full documented list):
+   `FRONTEND_URL`, `GOOGLE_ALLOWED_EMAIL`,
    `GOOGLE_LOGIN_CLIENT_ID`, `GOOGLE_LOGIN_CLIENT_SECRET`,
-   `GOOGLE_ALLOWED_EMAIL=doublef.corp@gmail.com`,
-   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-   `TIKTOK_CLIENT_KEY`, and `TIKTOK_CLIENT_SECRET`.
+   `GOOGLE_LOGIN_REDIRECT_URI`,
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`,
+   `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI`,
+   `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI`,
+   `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI`.
+   Optional keys with code defaults (`META_API_VERSION`, `DATA_DIR`,
+   `DEFAULT_USER_ID`) may be added to pin values explicitly.
 4. Add the following URL values to that Secret. For the default environment,
    the expected URL is `https://WORKSPACE--vidpush-web.modal.run`; confirm the
    actual address in deployment output and update the Secret if different:

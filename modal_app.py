@@ -38,9 +38,13 @@ image = image.run_commands("npm run build").env({
 @app.function(
     image=image,
     secrets=[modal.Secret.from_name("vidpush-config", required_keys=[
-        "FRONTEND_URL", "GOOGLE_REDIRECT_URI", "TIKTOK_REDIRECT_URI",
+        "FRONTEND_URL", "GOOGLE_ALLOWED_EMAIL",
         "GOOGLE_LOGIN_CLIENT_ID", "GOOGLE_LOGIN_CLIENT_SECRET",
-        "GOOGLE_LOGIN_REDIRECT_URI", "GOOGLE_ALLOWED_EMAIL",
+        "GOOGLE_LOGIN_REDIRECT_URI",
+        "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI",
+        "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_REDIRECT_URI",
+        "FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET", "FACEBOOK_REDIRECT_URI",
+        "INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "INSTAGRAM_REDIRECT_URI",
     ])],
     volumes={"/data": data},
     # Single writer (SQLite plus in-memory queue). Scale to zero when idle,

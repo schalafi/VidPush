@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { friendlyCaptureError, validateThumbnailFile } from "./thumbnail";
 
 /** Format seconds as M:SS for the scrubber readout. */
 export function formatCaptureTime(sec: number): string {
@@ -15,9 +16,9 @@ type Props = {
 };
 
 /**
- * Lets the user scrub through their own video file and capture one frame
- * as a JPEG thumbnail. The thumbnail is applied to YouTube uploads;
- * other platforms use their default frame.
+ * YouTube-style thumbnail side panel: the current selection on top, then
+ * frame capture and image upload as the two ways to set it. The thumbnail
+ * is applied to YouTube uploads; other platforms use their default frame.
  */
 export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) {
   const [url, setUrl] = useState<string | null>(null);
@@ -53,6 +54,22 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
     setPosition(clamped);
   };
 
+  /** Settle the video on the scrubbed frame so the capture matches the picker. */
+  const settleSeek = (v: HTMLVideoElement, target: number) =>
+    new Promise<void>((resolve) => {
+      if (!Number.isFinite(v.duration) || Math.abs(v.currentTime - target) < 0.05) {
+        resolve();
+        return;
+      }
+      const done = () => {
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const timer = window.setTimeout(done, 1500);
+      v.addEventListener("seeked", done, { once: true });
+      v.currentTime = Math.min(Math.max(0, target), v.duration);
+    });
+
   const capture = async () => {
     const v = videoRef.current;
     if (!v || !v.videoWidth) {
@@ -62,6 +79,7 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
     setBusy(true);
     setErr(null);
     try {
+      await settleSeek(v, position);
       const scale = Math.min(1, 1280 / v.videoWidth);
       const canvas = document.createElement("canvas");
       canvas.width = Math.round(v.videoWidth * scale);
@@ -80,10 +98,23 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
       setPreview(URL.createObjectURL(thumb));
       onThumbnail(thumb);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not capture that frame.");
+      setErr(friendlyCaptureError(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  const useImageFile = (chosen: File | undefined) => {
+    if (!chosen) return;
+    const invalid = validateThumbnailFile(chosen);
+    if (invalid) {
+      setErr(invalid);
+      return;
+    }
+    setErr(null);
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(URL.createObjectURL(chosen));
+    onThumbnail(chosen);
   };
 
   const clear = () => {
@@ -93,12 +124,20 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
   };
 
   return (
-    <div className="thumb-picker">
+    <section className="thumb-side" aria-label="YouTube thumbnail">
+      <h4 className="thumb-side-title">Thumbnail</h4>
+      <p className="hint">YouTube only. Other platforms pick their own frame.</p>
+      {preview ? (
+        <img className="thumb-current" src={preview} alt="Selected YouTube thumbnail" />
+      ) : (
+        <div className="thumb-placeholder">No custom thumbnail — YouTube will pick one</div>
+      )}
       {url && (
         <video
           ref={videoRef}
-          className="thumb-picker-video"
+          className="thumb-side-video"
           src={url}
+          crossOrigin="anonymous"
           preload="metadata"
           muted
           playsInline
@@ -110,8 +149,8 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
           onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
         />
       )}
-      <div className="thumb-picker-row">
-        <label className="thumb-picker-label" htmlFor={`scrub-${file.name}`}>
+      <div className="thumb-side-row">
+        <label className="thumb-side-label" htmlFor={`scrub-${file.name}`}>
           Frame at {formatCaptureTime(position)}
           {duration > 0 ? ` of ${formatCaptureTime(duration)}` : ""}
         </label>
@@ -127,15 +166,28 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
           aria-label="Scrub video to choose a thumbnail frame"
         />
       </div>
-      <div className="row-actions thumb-picker-actions">
+      <div className="row-actions thumb-side-actions">
         <button
           type="button"
           className="btn"
           disabled={disabled || busy || !url}
           onClick={() => void capture()}
         >
-          {busy ? "Capturing…" : preview ? "Re-capture frame" : "Use current frame"}
+          {busy ? "Capturing…" : preview ? "Re-capture" : "Capture frame"}
         </button>
+        <label className={`btn ghost${disabled || busy ? " disabled" : ""}`}>
+          Upload image
+          <input
+            type="file"
+            accept="image/*"
+            hidden
+            disabled={disabled || busy}
+            onChange={(e) => {
+              useImageFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+        </label>
         {preview && (
           <button type="button" className="btn ghost" disabled={disabled || busy} onClick={clear}>
             Remove
@@ -143,14 +195,6 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
         )}
       </div>
       {err && <div className="banner error" role="alert">{err}</div>}
-      {preview ? (
-        <figure className="thumb-preview">
-          <img src={preview} alt="Selected video thumbnail" />
-          <figcaption className="hint">Thumbnail for YouTube. Other platforms use their default frame.</figcaption>
-        </figure>
-      ) : (
-        <p className="hint">Optional. Scrub to a frame and capture it as the YouTube thumbnail.</p>
-      )}
-    </div>
+    </section>
   );
 }

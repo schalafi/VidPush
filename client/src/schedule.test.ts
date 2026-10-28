@@ -4,6 +4,7 @@ import {
   dateToLocalInput,
   formatLocalPreview,
   formatSize,
+  initialConfirmDests,
   localInputToUtcMs,
   longUploadWarning,
   SCHEDULE_PRESETS,
@@ -141,6 +142,27 @@ describe("schedule presets", () => {
     const preview = formatLocalPreview(ms);
     expect(preview).toContain("6:30");
     expect(preview).toMatch(/PM/i);
+  });
+});
+
+describe("initialConfirmDests", () => {
+  const allOn = { youtube: true, tiktok: true, facebook: true, instagram: true };
+  const allConnected = { youtube: true, tiktok: true, facebook: true, instagram: true };
+
+  it("keeps the user's toggles for connected destinations", () => {
+    expect(initialConfirmDests(allOn, allConnected)).toEqual(allOn);
+  });
+
+  it("drops toggled-on destinations that are not connected", () => {
+    expect(
+      initialConfirmDests(allOn, { ...allConnected, facebook: false, instagram: false })
+    ).toEqual({ youtube: true, tiktok: true, facebook: false, instagram: false });
+  });
+
+  it("never enables a destination the user toggled off", () => {
+    expect(
+      initialConfirmDests({ ...allOn, youtube: false }, allConnected)
+    ).toEqual({ youtube: false, tiktok: true, facebook: true, instagram: true });
   });
 });
 

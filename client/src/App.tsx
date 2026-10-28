@@ -29,6 +29,7 @@ import {
   formatLocal,
   formatLocalPreview,
   formatSize,
+  initialConfirmDests,
   localInputToUtcMs,
   longUploadWarning,
   SCHEDULE_PRESETS,
@@ -38,6 +39,7 @@ import {
   type ScheduleDests,
 } from "./schedule";
 import ThumbnailPicker from "./ThumbnailPicker";
+import UploadConfirmDialog from "./UploadConfirmDialog";
 import "./App.css";
 
 const DEST_PREF_KEY = "vidpush.dests";
@@ -78,27 +80,6 @@ type QueueItem = {
   note: string | null;
 };
 
-function Thumb({ file }: { file: File }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    const u = URL.createObjectURL(file);
-    setUrl(u);
-    return () => URL.revokeObjectURL(u);
-  }, [file]);
-  if (!url || failed) return <div className="thumb thumb-fallback" aria-hidden="true">No preview</div>;
-  return (
-    <video
-      className="thumb"
-      src={url}
-      preload="metadata"
-      muted
-      playsInline
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
 export default function App() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -126,12 +107,20 @@ export default function App() {
   }, [youtubeOn, tiktokOn, facebookOn, instagramOn]);
   const [banner, setBanner] = useState<{ kind: "ok" | "err" | "info"; text: string } | null>(null);
   const [drag, setDrag] = useState(false);
+  const [sideTab, setSideTab] = useState<"accounts" | "destinations">("accounts");
   const [items, setItems] = useState<QueueItem[]>([]);
   const [jobs, setJobs] = useState<Record<string, UploadJob>>({});
   const [scheduled, setScheduled] = useState<ScheduledItem[]>([]);
   const [scheduledErr, setScheduledErr] = useState<string | null>(null);
   const keySeq = useRef(0);
   const dests: ScheduleDests = { youtube: youtubeOn, tiktok: tiktokOn, facebook: facebookOn, instagram: instagramOn };
+  const connectedDests: ScheduleDests = {
+    youtube: !!auth?.youtube,
+    tiktok: !!auth?.tiktok,
+    facebook: !!auth?.facebook.connected,
+    instagram: !!auth?.instagram.connected,
+  };
+  const [confirm, setConfirm] = useState<{ keys: string[]; dests: ScheduleDests } | null>(null);
   const [facebookConnection, setFacebookConnection] = useState<{ id: string; url: string } | null>(null);
   const [facebookStarting, setFacebookStarting] = useState(false);
 
@@ -350,7 +339,6 @@ export default function App() {
   const anyUploading = items.some(i => i.status === "uploading");
 
   const selectedCount = [youtubeOn, tiktokOn, facebookOn, instagramOn].filter(Boolean).length;
-  const anyOn = selectedCount > 0;
 
   const selectAll = () => {
     setYoutubeOn(true);
@@ -366,12 +354,12 @@ export default function App() {
     setInstagramOn(false);
   };
 
-  const connectionError = (): string | null => {
-    if (!anyOn) return "Turn on at least one destination.";
-    if (youtubeOn && !auth?.youtube) return "Connect YouTube first.";
-    if (tiktokOn && !auth?.tiktok) return "Connect TikTok first.";
-    if (facebookOn && !auth?.facebook.connected) return "Connect Facebook and choose a Page first.";
-    if (instagramOn && !auth?.instagram.connected) return "Connect Instagram first.";
+  const connectionError = (d: ScheduleDests): string | null => {
+    if (!d.youtube && !d.tiktok && !d.facebook && !d.instagram) return "Turn on at least one destination.";
+    if (d.youtube && !auth?.youtube) return "Connect YouTube first.";
+    if (d.tiktok && !auth?.tiktok) return "Connect TikTok first.";
+    if (d.facebook && !auth?.facebook.connected) return "Connect Facebook and choose a Page first.";
+    if (d.instagram && !auth?.instagram.connected) return "Connect Instagram first.";
     return null;
   };
 
@@ -413,10 +401,10 @@ export default function App() {
 
   const clearDone = () => setItems(prev => prev.filter(it => it.status === "uploading" || it.status === "queued"));
 
-  const startItem = async (key: string) => {
+  const startItem = async (key: string, d: ScheduleDests = dests) => {
     const item = itemsRef.current.find(i => i.key === key);
     if (!item || item.status === "uploading") return;
-    const conn = connectionError();
+    const conn = connectionError(d);
     if (conn) {
       setBanner({ kind: "err", text: conn });
       return;
@@ -427,12 +415,12 @@ export default function App() {
       patchItem(key, { status: "error", error: "Schedule time is not a valid date and time." });
       return;
     }
-    const schedErr = validateSchedule(publishAtMs, dests);
+    const schedErr = validateSchedule(publishAtMs, d);
     if (schedErr) {
       patchItem(key, { status: "error", error: schedErr });
       return;
     }
-    const fileErr = validateQueueFile(item.file, dests, item.title.trim());
+    const fileErr = validateQueueFile(item.file, d, item.title.trim());
     if (fileErr) {
       patchItem(key, { status: "error", error: fileErr });
       return;
@@ -441,10 +429,10 @@ export default function App() {
     try {
       const fd = new FormData();
       fd.append("video", item.file);
-      fd.append("youtube", String(youtubeOn));
-      fd.append("tiktok", String(tiktokOn));
-      fd.append("facebook", String(facebookOn));
-      fd.append("instagram", String(instagramOn));
+      fd.append("youtube", String(d.youtube));
+      fd.append("tiktok", String(d.tiktok));
+      fd.append("facebook", String(d.facebook));
+      fd.append("instagram", String(d.instagram));
       if (item.title.trim()) fd.append("title", item.title.trim());
       if (item.thumbnail) fd.append("thumbnail", item.thumbnail, item.thumbnail.name);
       if (publishAtMs !== null) fd.append("publishAt", new Date(publishAtMs).toISOString());
@@ -485,23 +473,33 @@ export default function App() {
     }
   };
 
-  const startAll = () => {
-    const conn = connectionError();
-    if (conn) {
-      setBanner({ kind: "err", text: conn });
+  const openConfirm = (keys: string[]) => {
+    if (!keys.length) return;
+    setConfirm({ keys, dests: initialConfirmDests(dests, connectedDests) });
+  };
+
+  const openConfirmAll = () => {
+    const queued = itemsRef.current.filter(i => i.status === "queued" || i.status === "error");
+    openConfirm(queued.map(i => i.key));
+  };
+
+  const confirmNow = () => {
+    if (!confirm) return;
+    const { keys, dests: d } = confirm;
+    setConfirm(null);
+    if (keys.length === 1) {
+      void startItem(keys[0], d);
       return;
     }
-    const queued = itemsRef.current.filter(i => i.status === "queued" || i.status === "error");
-    if (!queued.length) return;
-    setBanner({ kind: "info", text: `Uploading ${queued.length === 1 ? "1 video" : `${queued.length} videos`}. Progress shows on each row.` });
+    setBanner({ kind: "info", text: `Uploading ${keys.length} videos. Progress shows on each row.` });
     // At most two concurrent uploads; the rest start as slots free.
     let active = 0;
     let index = 0;
     const next = (): void => {
-      while (active < 2 && index < queued.length) {
-        const item = queued[index++];
+      while (active < 2 && index < keys.length) {
+        const key = keys[index++];
         active += 1;
-        void startItem(item.key).finally(() => {
+        void startItem(key, d).finally(() => {
           active -= 1;
           next();
         });
@@ -610,9 +608,30 @@ export default function App() {
         </div>
       )}
 
-      <div className="grid">
-        <section className="card">
-          <h2>Accounts</h2>
+      <div className="work-grid">
+        <aside className="side">
+          <div className="card side-card">
+            <div className="tabs" role="tablist" aria-label="Setup">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideTab === "accounts"}
+                className={sideTab === "accounts" ? "tab active" : "tab"}
+                onClick={() => setSideTab("accounts")}
+              >
+                Accounts
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sideTab === "destinations"}
+                className={sideTab === "destinations" ? "tab active" : "tab"}
+                onClick={() => setSideTab("destinations")}
+              >
+                Destinations{selectedCount > 0 ? ` (${selectedCount})` : ""}
+              </button>
+            </div>
+            <section hidden={sideTab !== "accounts"} aria-label="Accounts">
           <div className="accounts">
             <div className="account-row">
               <div className="account-meta">
@@ -689,10 +708,8 @@ export default function App() {
             </div>}
           </div>
           <p className="hint">Facebook publishes to a Page. Instagram uses its own professional account and login.</p>
-        </section>
-
-        <section className="card">
-          <h2>Destinations</h2>
+            </section>
+            <section hidden={sideTab !== "destinations"} aria-label="Destinations">
           <div className="master-actions">
             <button type="button" className="btn" disabled={anyUploading} onClick={selectAll}>
               Select all
@@ -754,7 +771,11 @@ export default function App() {
               linked to a Facebook Page, then press Connect above.
             </p>
           )}
-          <h3 className="subhead">Videos</h3>
+            </section>
+          </div>
+        </aside>
+        <section className="card videos-card">
+          <h2>Videos</h2>
           <div
             className={`dropzone ${drag ? "drag" : ""}`}
             role="button"
@@ -807,7 +828,6 @@ export default function App() {
                 const locked = item.status === "uploading";
                 return (
                   <div className="queue-item" key={item.key}>
-                    <Thumb file={item.file} />
                     <div className="queue-main">
                       <div className="queue-head">
                         <strong className="queue-name">{item.file.name}</strong>
@@ -878,11 +898,6 @@ export default function App() {
                           })()}
                         </p>
                       </div>
-                      <ThumbnailPicker
-                        file={item.file}
-                        disabled={locked}
-                        onThumbnail={(thumb) => patchItem(item.key, { thumbnail: thumb })}
-                      />
                       {item.status === "uploading" && (
                         <div className="progress" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${item.file.name}`}>
                           <div className="progress-track">
@@ -909,7 +924,7 @@ export default function App() {
                       )}
                       <div className="row-actions">
                         {(item.status === "queued" || item.status === "error") && (
-                          <button type="button" className="btn primary" onClick={() => void startItem(item.key)}>
+                          <button type="button" className="btn primary" onClick={() => openConfirm([item.key])}>
                             {item.status === "error" ? "Retry" : item.scheduleLocal.trim() ? "Schedule" : "Upload"}
                           </button>
                         )}
@@ -919,6 +934,13 @@ export default function App() {
                           </button>
                         )}
                       </div>
+                    </div>
+                    <div className="queue-side">
+                      <ThumbnailPicker
+                        file={item.file}
+                        disabled={locked}
+                        onThumbnail={(thumb) => patchItem(item.key, { thumbnail: thumb })}
+                      />
                     </div>
                   </div>
                 );
@@ -931,7 +953,7 @@ export default function App() {
               type="button"
               className="btn primary"
               disabled={!items.some(i => i.status === "queued" || i.status === "error")}
-              onClick={startAll}
+              onClick={openConfirmAll}
             >
               {anyUploading ? "Uploading…" : "Start all"}
             </button>
@@ -943,6 +965,17 @@ export default function App() {
           </div>
         </section>
       </div>
+
+      {confirm && (
+        <UploadConfirmDialog
+          count={confirm.keys.length}
+          dests={confirm.dests}
+          connected={connectedDests}
+          onChange={(d) => setConfirm({ ...confirm, dests: d })}
+          onConfirm={confirmNow}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
 
       <section className="card scheduled-card">
         <h2>Scheduled</h2>

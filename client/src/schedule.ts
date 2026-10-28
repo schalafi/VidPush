@@ -73,6 +73,19 @@ export function formatSize(bytes: number): string {
 
 export type ScheduleDests = { youtube: boolean; tiktok: boolean; facebook: boolean; instagram: boolean };
 
+/**
+ * Defaults for the upload confirm dialog: keep the user's sidebar toggles,
+ * but drop destinations that are not connected.
+ */
+export function initialConfirmDests(prefs: ScheduleDests, connected: ScheduleDests): ScheduleDests {
+  return {
+    youtube: prefs.youtube && connected.youtube,
+    tiktok: prefs.tiktok && connected.tiktok,
+    facebook: prefs.facebook && connected.facebook,
+    instagram: prefs.instagram && connected.instagram,
+  };
+}
+
 /** Client mirror of the server policy: error message or null when acceptable. */
 export function validateSchedule(publishAtMs: number | null, dests: ScheduleDests): string | null {
   if (publishAtMs === null) return null;

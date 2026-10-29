@@ -20,12 +20,19 @@ Muse Code reads this file as project rules when it runs in this directory.
 
 - UI + API share one origin: `https://schalafi-vidpush--vidpush-web.modal.run`
   (workspace `schalafi`, environment `vidpush`).
-- Pushing to GitHub does NOT update the deployment. After pulling new code,
-  redeploy from the project root: `modal deploy --env vidpush modal_app.py`.
+- CI/CD (`.github/workflows/ci.yml`) runs on every push to `main` and on pull
+  requests: `npm ci`, `npm test`, `npm run build`, `py_compile modal_app.py`.
+  Pushes to `main` then auto-deploy (`modal deploy --env vidpush modal_app.py`)
+  and curl `/api/health`. Pushing to GitHub DOES update the deployment — no
+  manual `modal deploy` needed for code changes.
+- Manual redeploy from the project root (`modal deploy --env vidpush
+  modal_app.py`) is only for exceptional cases (e.g. re-running a failed
+  deploy step without a new commit).
 - Secrets live in the Modal Secret `vidpush-config` (same environment), copied
-  from local `.env`. Redeploy after changing the Secret.
-- The deploy mounts the working tree and rebuilds the image, so commit first
-  and keep the tree clean of scratch files.
+  from local `.env`. After changing the Secret, trigger a redeploy (an empty
+  commit is enough) so the new Secret is picked up.
+- The image builds from the committed tree, so commit first and keep the tree
+  clean of scratch files.
 - Verify after deploy: `/api/health` returns ok and the served JS bundle
   contains the latest flow markers.
 - Full checklist: [docs/modal.md](docs/modal.md).

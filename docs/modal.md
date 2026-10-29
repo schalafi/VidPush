@@ -49,7 +49,7 @@ if your current shell does not yet find `modal`.
 
 ## CI/CD
 
-Pushing to GitHub does NOT deploy. The [CI workflow](../.github/workflows/ci.yml)
+Pushing to GitHub DOES deploy. The [CI workflow](../.github/workflows/ci.yml)
 runs `npm test` and `npm run build` on every push and pull request. When tests
 pass on a push to `main`, it deploys with `modal deploy --env vidpush
 modal_app.py` and then checks `/api/health`.

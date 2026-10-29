@@ -24,17 +24,30 @@ export async function waitForFacebook(token: string, video: string, wait = pause
   }
   throw new Error(`Facebook has not confirmed publication of video ${video}. Check the Page before retrying.`);
 }
-export async function uploadToMeta(platform: MetaPlatform, userId: string, filePath: string, caption: string, publishAtMs?: number): Promise<string> {
+export async function uploadToMeta(platform: MetaPlatform, userId: string, filePath: string, caption: string, publishAtMs?: number, thumbnailPath?: string): Promise<string> {
   const { token, id } = await metaCredentials(userId, platform);
   if (platform === "instagram") {
     // Instagram Login apps cannot open resumable sessions (reserved for
     // Facebook Login for Business), so Reels publish via `video_url`: Meta
     // fetches the bytes from a short-lived, unguessable link served by us.
-    // The link is revoked as soon as the publish attempt settles.
+    // A custom cover works the same way via `cover_url`. Both links are
+    // revoked as soon as the publish attempt settles.
     const videoUrl = issuePublicFileUrl(publicBaseUrl(), filePath);
+    const coverUrl = thumbnailPath ? issuePublicFileUrl(publicBaseUrl(), thumbnailPath) : undefined;
+    const createContainer = (cover: string | undefined) =>
+      graph<{ id: string }>(platform, `${id}/media`, token,
+        { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: "true", ...(cover ? { cover_url: cover } : {}) }, "POST");
     try {
-      const container = await graph<{ id: string }>(platform, `${id}/media`, token,
-        { media_type: "REELS", video_url: videoUrl, caption, share_to_feed: "true" }, "POST");
+      let container: { id: string };
+      try {
+        container = await createContainer(coverUrl);
+      } catch (e) {
+        // Best effort like the YouTube thumbnail: a rejected cover must not
+        // fail an otherwise fine Reel, so retry once without it.
+        if (!coverUrl) throw e;
+        console.warn(`Instagram cover for ${filePath} was not applied:`, e instanceof Error ? e.message : e);
+        container = await createContainer(undefined);
+      }
       if (!container.id) throw new Error("Instagram did not return a media container");
       await waitForInstagram(token, container.id);
       const published = await graph<{ id: string }>(platform, `${id}/media_publish`, token, { creation_id: container.id }, "POST");
@@ -42,6 +55,7 @@ export async function uploadToMeta(platform: MetaPlatform, userId: string, fileP
       return published.id;
     } finally {
       revokePublicFileUrl(videoUrl);
+      if (coverUrl) revokePublicFileUrl(coverUrl);
     }
   }
   const video = await graph<{ video_id: string; upload_url: string }>(platform, `${id}/video_reels`, token, { upload_phase: "start" }, "POST");

@@ -50,7 +50,7 @@ export function scheduledDir(): string {
 export function validateThumbnail(file: { mimetype: string; size: number } | undefined): string | null {
   if (!file) return null;
   if (!file.mimetype.startsWith("image/")) return "Thumbnail must be an image file.";
-  if (file.size > 2 * 1024 * 1024) return "Thumbnail must be up to 2 MB (YouTube limit).";
+  if (file.size > 2 * 1024 * 1024) return "Thumbnail must be up to 2 MB.";
   return null;
 }
 
@@ -170,14 +170,24 @@ router.post("/", videoUpload, async (req, res) => {
   }
 
   const scheduleIds: string[] = [];
+  // Thumbnails apply to YouTube and Instagram (as the Reel cover). TikTok
+  // and Facebook pick their own frame, so a thumbnail chosen for those
+  // destinations alone is validated but then discarded.
+  let storedThumbPath: string | null = null;
   if ((heldTiktok || heldInstagram) && publishAtMs !== undefined) {
     const id = uuidv4();
     const safe = reqFile.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
     const dest = path.join(scheduledDir(), `${id}-${safe}`);
     try {
       fs.copyFileSync(reqFile.path, dest);
+      if (heldInstagram && thumbnail?.path) {
+        const thumbSafe = thumbnail.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+        storedThumbPath = path.join(scheduledDir(), `${id}-thumb-${thumbSafe}`);
+        fs.copyFileSync(thumbnail.path, storedThumbPath);
+      }
     } catch {
       cleanup();
+      if (storedThumbPath) fs.unlink(storedThumbPath, () => {});
       res.status(500).json({ error: "Could not store the video for scheduled publishing" });
       return;
     }
@@ -192,6 +202,7 @@ router.post("/", videoUpload, async (req, res) => {
       destinations: JSON.stringify({ tiktok: heldTiktok, instagram: heldInstagram }),
       publish_at: publishAtMs,
       created_at: Date.now(),
+      thumb_path: storedThumbPath,
     });
     scheduleIds.push(id);
   }
@@ -208,10 +219,11 @@ router.post("/", videoUpload, async (req, res) => {
   pruneJobs();
 
   const filePath = reqFile.path;
-  // Thumbnails apply to YouTube only; held-only uploads (TikTok/Instagram)
-  // run later from the stored video copy, so an unused thumbnail is dropped
-  // with the temp files by cleanup().
-  const thumbnailPath = wantYoutube ? thumbnail?.path : undefined;
+  // The temp thumbnail is consumed by runUploadJob when YouTube or an
+  // immediate Instagram upload uses it; otherwise delete it here so unused
+  // thumbnails do not accumulate in the upload directory.
+  const thumbnailPath = wantYoutube || nowInstagram ? thumbnail?.path : undefined;
+  if (thumbnail?.path && !thumbnailPath) fs.unlink(thumbnail.path, () => {});
 
   void runUploadJob({
     jobId,

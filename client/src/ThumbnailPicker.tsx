@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { friendlyCaptureError, validateThumbnailFile } from "./thumbnail";
 
 /** Format seconds as M:SS for the scrubber readout. */
@@ -16,11 +16,12 @@ type Props = {
 };
 
 /**
- * YouTube-style thumbnail side panel: the current selection on top, then
- * frame capture and image upload as the two ways to set it. The thumbnail
- * is applied to YouTube uploads; other platforms use their default frame.
+ * Thumbnail side panel: the current selection on top, then frame capture
+ * and image upload as the two ways to set it. The thumbnail is applied to
+ * YouTube and Instagram uploads; TikTok and Facebook pick their own frame.
  */
 export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) {
+  const scrubId = useId();
   const [url, setUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
@@ -72,7 +73,9 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
 
   const capture = async () => {
     const v = videoRef.current;
-    if (!v || !v.videoWidth) {
+    // HAVE_METADATA (1) exposes dimensions but no frame data yet; drawing
+    // needs HAVE_CURRENT_DATA (2), otherwise the canvas gets a blank frame.
+    if (!v || !v.videoWidth || v.readyState < 2) {
       setErr("Wait for the video to load, then try again.");
       return;
     }
@@ -124,21 +127,20 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
   };
 
   return (
-    <section className="thumb-side" aria-label="YouTube thumbnail">
+    <section className="thumb-side" aria-label="Video thumbnail">
       <h4 className="thumb-side-title">Thumbnail</h4>
-      <p className="hint">YouTube only. Other platforms pick their own frame.</p>
+      <p className="hint">Applies to YouTube and Instagram. TikTok and Facebook pick their own frame.</p>
       {preview ? (
-        <img className="thumb-current" src={preview} alt="Selected YouTube thumbnail" />
+        <img className="thumb-current" src={preview} alt="Selected video thumbnail" />
       ) : (
-        <div className="thumb-placeholder">No custom thumbnail — YouTube will pick one</div>
+        <div className="thumb-placeholder">No custom thumbnail — each platform will pick one</div>
       )}
       {url && (
         <video
           ref={videoRef}
           className="thumb-side-video"
           src={url}
-          crossOrigin="anonymous"
-          preload="metadata"
+          preload="auto"
           muted
           playsInline
           onLoadedMetadata={(e) => {
@@ -150,12 +152,12 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
         />
       )}
       <div className="thumb-side-row">
-        <label className="thumb-side-label" htmlFor={`scrub-${file.name}`}>
+        <label className="thumb-side-label" htmlFor={scrubId}>
           Frame at {formatCaptureTime(position)}
           {duration > 0 ? ` of ${formatCaptureTime(duration)}` : ""}
         </label>
         <input
-          id={`scrub-${file.name}`}
+          id={scrubId}
           type="range"
           min={0}
           max={duration > 0 ? duration : 0}

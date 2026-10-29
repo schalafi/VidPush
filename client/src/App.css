@@ -578,8 +578,9 @@ a.btn { text-decoration: none; display: inline-block; }
 
 .thumb-current {
   width: 100%;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: #000;
@@ -601,7 +602,8 @@ a.btn { text-decoration: none; display: inline-block; }
 
 .thumb-side-video {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: auto;
+  max-height: 320px;
   border-radius: 8px;
   background: #000;
 }

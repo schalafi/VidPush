@@ -28,6 +28,6 @@ export function friendlyCaptureError(e: unknown): string {
  */
 export function validateThumbnailFile(file: { type: string; size: number }): string | null {
   if (!file.type.startsWith("image/")) return "Thumbnail must be an image file (JPG or PNG).";
-  if (file.size > MAX_THUMBNAIL_BYTES) return "Thumbnail must be up to 2 MB (YouTube limit).";
+  if (file.size > MAX_THUMBNAIL_BYTES) return "Thumbnail must be up to 2 MB.";
   return null;
 }

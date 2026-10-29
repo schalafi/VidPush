@@ -129,7 +129,10 @@ export async function runUploadJob(args: {
     tasks.push((async () => {
       updatePlatform(jobId, platform, { status: "uploading" });
       try {
-        const videoId = await uploadToMeta(platform, userId, filePath, title, platform === "facebook" ? publishAtMs : undefined);
+        // Custom thumbnails: YouTube and Instagram accept an image; TikTok
+        // and Facebook pick their own frame, so the file is only forwarded
+        // where the platform API supports it.
+        const videoId = await uploadToMeta(platform, userId, filePath, title, platform === "facebook" ? publishAtMs : undefined, platform === "instagram" ? thumbnailPath : undefined);
         updatePlatform(jobId, platform, { status: "done", videoId });
       } catch (error) {
         updatePlatform(jobId, platform, { status: "error", error: error instanceof Error ? error.message : "Upload failed" });

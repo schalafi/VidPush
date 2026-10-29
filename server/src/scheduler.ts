@@ -34,6 +34,9 @@ export async function dispatchDue(now: number = Date.now()): Promise<string[]> {
       jobId,
       userId: row.user_id,
       filePath: row.file_path,
+      // A stored thumbnail applies to held Instagram uploads as the Reel
+      // cover; the file is deleted with the video when the job settles.
+      thumbnailPath: row.thumb_path ?? undefined,
       wantYoutube: false,
       wantTiktok: !!dests.tiktok,
       wantFacebook: false,

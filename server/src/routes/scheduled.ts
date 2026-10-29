@@ -103,12 +103,16 @@ router.delete("/:id", (req, res) => {
     res.status(404).json({ error: "Scheduled video not found" });
     return;
   }
+  const dropFiles = () => {
+    fs.unlink(row.file_path, () => {});
+    if (row.thumb_path) fs.unlink(row.thumb_path, () => {});
+  };
   if (row.status === "error" || row.status === "done" || row.status === "cancelled") {
     // Finished rows are inert history and their file is already gone
     // (consumed by dispatch or deleted on cancel), so remove the row
     // outright to clear it from the list.
     deleteScheduled(row.id);
-    fs.unlink(row.file_path, () => {});
+    dropFiles();
     res.json({ ok: true });
     return;
   }
@@ -117,7 +121,7 @@ router.delete("/:id", (req, res) => {
     return;
   }
   setScheduledState(row.id, "cancelled");
-  fs.unlink(row.file_path, () => {});
+  dropFiles();
   res.json({ ok: true });
 });
 

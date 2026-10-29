@@ -42,7 +42,13 @@ export function publicBaseUrl(): string {
 export function issuePublicFileUrl(base: string, filePath: string): string {
   prune();
   const token = uuidv4();
-  const mime = path.extname(filePath).toLowerCase() === ".mov" ? "video/quicktime" : "video/mp4";
+  const ext = path.extname(filePath).toLowerCase();
+  let mime = "video/mp4";
+  if (ext === ".mov") mime = "video/quicktime";
+  else if (ext === ".jpg" || ext === ".jpeg") mime = "image/jpeg";
+  else if (ext === ".png") mime = "image/png";
+  else if (ext === ".webp") mime = "image/webp";
+  else if (ext === ".gif") mime = "image/gif";
   links.set(token, { filePath, mime, expiresAt: Date.now() + TTL_MS });
   return `${base}/api/upload/public/${token}`;
 }

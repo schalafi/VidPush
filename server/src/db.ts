@@ -60,11 +60,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS scheduled_posts (
   status TEXT NOT NULL DEFAULT 'scheduled',
   job_id TEXT,
   error TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  thumb_path TEXT
 )`);
-// Additive migration: timestamp terminal transitions for retention pruning.
+// Additive migrations: timestamp terminal transitions for retention pruning,
+// and an optional stored thumbnail for held Instagram uploads.
 const schedCols = db.prepare("PRAGMA table_info(scheduled_posts)").all() as { name: string }[];
 if (!schedCols.some(c => c.name === "completed_at")) db.exec("ALTER TABLE scheduled_posts ADD COLUMN completed_at INTEGER");
+if (!schedCols.some(c => c.name === "thumb_path")) db.exec("ALTER TABLE scheduled_posts ADD COLUMN thumb_path TEXT");
 
 export type OauthProvider = "youtube" | "tiktok" | "facebook" | "instagram";
 
@@ -85,13 +88,14 @@ export type ScheduledRow = {
   error: string | null;
   created_at: number;
   completed_at: number | null;
+  thumb_path: string | null;
 };
 
-export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "error" | "completed_at">): ScheduledRow {
-  const full: ScheduledRow = { ...row, status: "scheduled", job_id: null, error: null, completed_at: null };
+export function createScheduled(row: Omit<ScheduledRow, "status" | "job_id" | "error" | "completed_at" | "thumb_path"> & { thumb_path?: string | null }): ScheduledRow {
+  const full: ScheduledRow = { ...row, thumb_path: row.thumb_path ?? null, status: "scheduled", job_id: null, error: null, completed_at: null };
   db.prepare(
-    `INSERT INTO scheduled_posts (id, user_id, file_path, original_name, size, title, description, destinations, publish_at, status, job_id, error, created_at)
-     VALUES (@id, @user_id, @file_path, @original_name, @size, @title, @description, @destinations, @publish_at, @status, @job_id, @error, @created_at)`
+    `INSERT INTO scheduled_posts (id, user_id, file_path, original_name, size, title, description, destinations, publish_at, status, job_id, error, created_at, thumb_path)
+     VALUES (@id, @user_id, @file_path, @original_name, @size, @title, @description, @destinations, @publish_at, @status, @job_id, @error, @created_at, @thumb_path)`
   ).run(full);
   return full;
 }
@@ -132,13 +136,14 @@ export function setScheduledState(id: string, status: ScheduledStatus, error: st
  */
 export function pruneTerminalScheduled(cutoffMs: number): string[] {
   const rows = db.prepare(
-    `SELECT id, file_path FROM scheduled_posts
+    `SELECT id, file_path, thumb_path FROM scheduled_posts
      WHERE status IN ('done', 'cancelled')
        AND COALESCE(completed_at, publish_at, created_at) < ?`
-  ).all(cutoffMs) as { id: string; file_path: string }[];
+  ).all(cutoffMs) as { id: string; file_path: string; thumb_path: string | null }[];
   for (const row of rows) {
     db.prepare("DELETE FROM scheduled_posts WHERE id = ?").run(row.id);
     fs.unlink(row.file_path, () => {});
+    if (row.thumb_path) fs.unlink(row.thumb_path, () => {});
   }
   return rows.map(r => r.id);
 }

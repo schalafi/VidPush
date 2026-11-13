@@ -2,6 +2,17 @@
 
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Clamps a requested scrub position into [0, duration]. Unusable inputs
+ * (NaN time, unknown or non-positive duration) park at 0 so the slider
+ * never drives the video to an invalid currentTime.
+ */
+export function clampSeekTime(sec: number, duration: number): number {
+  if (!Number.isFinite(sec)) return 0;
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  return Math.min(Math.max(0, sec), duration);
+}
+
 /** True when the error is the browser refusing to export a tainted canvas. */
 export function isTaintError(e: unknown): boolean {
   if (e instanceof DOMException && e.name === "SecurityError") return true;

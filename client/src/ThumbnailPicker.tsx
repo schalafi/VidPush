@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { friendlyCaptureError, validateThumbnailFile } from "./thumbnail";
+import { clampSeekTime, friendlyCaptureError, validateThumbnailFile } from "./thumbnail";
 
 /** Format seconds as M:SS for the scrubber readout. */
 export function formatCaptureTime(sec: number): string {
@@ -29,6 +29,11 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // True between the user's first scrub input and the matching seeked
+  // event (or gesture end). While set, video timeupdate events carry the
+  // pre-seek frame and must not overwrite the dragged position, or the
+  // controlled slider snaps back under the user's finger.
+  const scrubbingRef = useRef(false);
 
   useEffect(() => {
     const u = URL.createObjectURL(file);
@@ -50,9 +55,18 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
   const seekTo = (sec: number) => {
     const v = videoRef.current;
     if (!v || !Number.isFinite(v.duration)) return;
-    const clamped = Math.min(Math.max(0, sec), v.duration);
+    const clamped = clampSeekTime(sec, v.duration);
+    scrubbingRef.current = true;
     v.currentTime = clamped;
     setPosition(clamped);
+  };
+
+  /** Gesture end fallback: a seek that never completes must not pin scrubbing on. */
+  const endScrub = () => {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    const v = videoRef.current;
+    if (v && Number.isFinite(v.currentTime)) setPosition(v.currentTime);
   };
 
   /** Settle the video on the scrubbed frame so the capture matches the picker. */
@@ -147,8 +161,13 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
             setDuration(e.currentTarget.duration || 0);
             setPosition(e.currentTarget.currentTime || 0);
           }}
-          onSeeked={(e) => setPosition(e.currentTarget.currentTime)}
-          onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
+          onSeeked={(e) => {
+            scrubbingRef.current = false;
+            setPosition(e.currentTarget.currentTime);
+          }}
+          onTimeUpdate={(e) => {
+            if (!scrubbingRef.current) setPosition(e.currentTarget.currentTime);
+          }}
         />
       )}
       <div className="thumb-side-row">
@@ -165,6 +184,9 @@ export default function ThumbnailPicker({ file, disabled, onThumbnail }: Props) 
           value={Math.min(position, duration || 0)}
           disabled={disabled || busy || !(duration > 0)}
           onChange={(e) => seekTo(Number(e.target.value))}
+          onPointerUp={endScrub}
+          onBlur={endScrub}
+          onKeyUp={endScrub}
           aria-label="Scrub video to choose a thumbnail frame"
         />
       </div>

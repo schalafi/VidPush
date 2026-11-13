@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { friendlyCaptureError, isTaintError, validateThumbnailFile } from "./thumbnail";
+import { clampSeekTime, friendlyCaptureError, isTaintError, validateThumbnailFile } from "./thumbnail";
 
 describe("isTaintError", () => {
   it("detects the Chrome tainted-canvas toBlob message", () => {
@@ -33,6 +33,25 @@ describe("friendlyCaptureError", () => {
     expect(friendlyCaptureError(new Error("Wait for the video to load, then try again."))).toBe(
       "Wait for the video to load, then try again."
     );
+  });
+});
+
+describe("clampSeekTime", () => {
+  it("passes ordinary positions through", () => {
+    expect(clampSeekTime(4.2, 10)).toBe(4.2);
+    expect(clampSeekTime(0, 10)).toBe(0);
+  });
+
+  it("clamps below zero and beyond duration", () => {
+    expect(clampSeekTime(-3, 10)).toBe(0);
+    expect(clampSeekTime(12.5, 10)).toBe(10);
+  });
+
+  it("parks at zero when the time or duration is unusable", () => {
+    expect(clampSeekTime(NaN, 10)).toBe(0);
+    expect(clampSeekTime(5, NaN)).toBe(0);
+    expect(clampSeekTime(5, Infinity)).toBe(0);
+    expect(clampSeekTime(5, 0)).toBe(0);
   });
 });
 

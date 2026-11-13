@@ -8,6 +8,7 @@ const dir = mkdtempSync(`${tmpdir()}/vidpush-thumbnail-`);
 process.env.DATA_DIR = dir;
 process.env.META_API_VERSION = "v24.0";
 
+const { setYoutubeThumbnail, youtubeThumbnailMimeType } = await import("../src/services/youtubeUpload.js");
 const { validateThumbnail } = await import("../src/routes/upload.js");
 const { createScheduled, getScheduled, upsertTokens, db } = await import("../src/db.js");
 const { dispatchDue } = await import("../src/scheduler.js");
@@ -148,6 +149,96 @@ test("held Instagram uploads store the thumbnail and drop it on cancel", async (
   assert.ok(existsSync(row.thumb_path!));
   assert.equal((await fetch(`${base}/api/scheduled/${row.id}`, { method: "DELETE" })).status, 200);
   assert.equal(existsSync(row.thumb_path!), false);
+});
+
+test("youtube thumbnail mime type follows the file extension", () => {
+  assert.equal(youtubeThumbnailMimeType("cover.jpg"), "image/jpeg");
+  assert.equal(youtubeThumbnailMimeType("cover.jpeg"), "image/jpeg");
+  assert.equal(youtubeThumbnailMimeType("cover.png"), "image/png");
+  assert.equal(youtubeThumbnailMimeType("cover.webp"), "image/webp");
+  assert.equal(youtubeThumbnailMimeType("cover.gif"), "image/gif");
+  // Unknown extensions fall back to jpeg instead of octet-stream, which
+  // YouTube rejects for thumbnails.
+  assert.equal(youtubeThumbnailMimeType("cover"), "image/jpeg");
+});
+
+// The fake clients below never upload, so the recorded read streams would
+// outlive the temp dir removed in after(): swallow their async open errors
+// and destroy them once the test settles.
+function trackStream(store: unknown[], body: unknown): void {
+  store.push(body);
+  (body as { on?: (event: string, cb: () => void) => void }).on?.("error", () => {});
+}
+function closeStreams(store: unknown[]): void {
+  for (const body of store) (body as { destroy?: () => void }).destroy?.();
+}
+
+test("youtube thumbnail set sends an image mime type", async () => {
+  const thumb = `${dir}/yt-thumb.jpg`; writeFileSync(thumb, "fake-jpeg");
+  const seen: { videoId: string; mimeType: string; bodies: unknown[] } = { videoId: "", mimeType: "", bodies: [] };
+  const youtube = {
+    thumbnails: {
+      set: async (args: { videoId: string; media: { mimeType: string; body: unknown } }) => {
+        seen.videoId = args.videoId;
+        seen.mimeType = args.media.mimeType;
+        trackStream(seen.bodies, args.media.body);
+        return {};
+      },
+    },
+  };
+  try {
+    assert.equal(await setYoutubeThumbnail(youtube, "vid-1", thumb, async () => {}), true);
+    assert.equal(seen.videoId, "vid-1");
+    assert.equal(seen.mimeType, "image/jpeg");
+  } finally {
+    closeStreams(seen.bodies);
+  }
+});
+
+test("youtube thumbnail retries a transient failure instead of dropping it", async () => {
+  const thumb = `${dir}/yt-thumb-retry.png`; writeFileSync(thumb, "fake-png");
+  const bodies: unknown[] = [];
+  let calls = 0;
+  const waits: number[] = [];
+  const youtube = {
+    thumbnails: {
+      set: async (args: { videoId: string; media: { mimeType: string; body: unknown } }) => {
+        calls += 1;
+        trackStream(bodies, args.media.body);
+        assert.equal(args.media.mimeType, "image/png");
+        if (calls === 1) throw new Error("video not ready");
+        return {};
+      },
+    },
+  };
+  try {
+    assert.equal(await setYoutubeThumbnail(youtube, "vid-2", thumb, async (ms) => { waits.push(ms); }), true);
+    assert.equal(calls, 2);
+    assert.equal(waits.length, 1);
+  } finally {
+    closeStreams(bodies);
+  }
+});
+
+test("youtube thumbnail stays best-effort when every attempt fails", async () => {
+  const thumb = `${dir}/yt-thumb-fail.jpg`; writeFileSync(thumb, "fake-jpeg");
+  const bodies: unknown[] = [];
+  let calls = 0;
+  const youtube = {
+    thumbnails: {
+      set: async (args: { videoId: string; media: { mimeType: string; body: unknown } }) => {
+        calls += 1;
+        trackStream(bodies, args.media.body);
+        throw new Error("backend error");
+      },
+    },
+  };
+  try {
+    assert.equal(await setYoutubeThumbnail(youtube, "vid-3", thumb, async () => {}), false);
+    assert.equal(calls, 4);
+  } finally {
+    closeStreams(bodies);
+  }
 });
 
 test("dispatch sends the stored thumbnail as the Instagram cover", async () => {

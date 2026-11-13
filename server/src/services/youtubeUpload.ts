@@ -11,6 +11,23 @@ type ThumbnailClient = {
   };
 };
 
+type YoutubeClient = ThumbnailClient & {
+  videos: {
+    insert: (args: {
+      part: string[];
+      requestBody: {
+        snippet: { title: string; description: string; categoryId: string };
+        status: {
+          privacyStatus: string;
+          publishAt?: string;
+          selfDeclaredMadeForKids: boolean;
+        };
+      };
+      media: { body: unknown };
+    }) => Promise<{ data: { id?: string | null } }>;
+  };
+};
+
 const THUMBNAIL_ATTEMPTS = 4;
 const THUMBNAIL_RETRY_BASE_MS = 2000;
 
@@ -75,9 +92,10 @@ export async function uploadToYoutube(
   title: string,
   description: string,
   publishAtMs?: number,
-  thumbnailPath?: string
+  thumbnailPath?: string,
+  client?: YoutubeClient
 ): Promise<string> {
-  const youtube = await getYoutubeAuthorizedClient(userId);
+  const youtube: YoutubeClient = client ?? (await getYoutubeAuthorizedClient(userId));
   const stream = fs.createReadStream(filePath);
 
   const res = await youtube.videos.insert({
@@ -89,6 +107,7 @@ export async function uploadToYoutube(
         categoryId: "22",
       },
       // Native scheduling: a private video with publishAt goes public automatically.
+      // Without a schedule time the video goes out public immediately.
       status: publishAtMs
         ? {
             privacyStatus: "private",
@@ -96,7 +115,7 @@ export async function uploadToYoutube(
             selfDeclaredMadeForKids: false,
           }
         : {
-            privacyStatus: "unlisted",
+            privacyStatus: "public",
             selfDeclaredMadeForKids: false,
           },
     },
